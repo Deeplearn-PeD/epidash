@@ -27,9 +27,8 @@ class EpidBotError(RuntimeError):
     """A tweak round-trip against EpidBot failed."""
 
 
-def build_tweak_message(dashboard: dict, charts: list[dict], request: str) -> str:
-    """Prompt sent to the EpidBot agent for one tweak turn."""
-    compact = [
+def _compact_charts(charts: list[dict]) -> list[dict]:
+    return [
         {
             "id": c["id"],
             "kind": c["kind"],
@@ -40,6 +39,11 @@ def build_tweak_message(dashboard: dict, charts: list[dict], request: str) -> st
         }
         for c in charts
     ]
+
+
+def build_tweak_message(dashboard: dict, charts: list[dict], request: str) -> str:
+    """Prompt sent to the EpidBot agent for one tweak turn."""
+    compact = _compact_charts(charts)
     return (
         f"A viewer of the EpiDash dashboard '{dashboard.get('title', '')}' "
         f"(dashboard_id={dashboard['id']}, slug={dashboard['slug']}) requests "
@@ -51,6 +55,26 @@ def build_tweak_message(dashboard: dict, charts: list[dict], request: str) -> st
         "the existing visual style unless asked otherwise, keep data "
         "envelopes consistent with each chart kind, and reply with a one or "
         "two sentence summary of what you changed."
+    )
+
+
+def build_question_message(dashboard: dict, charts: list[dict], question: str) -> str:
+    """Prompt sent to the EpidBot agent when a viewer asks a question.
+
+    Same chat pipeline as tweaks, but the agent must answer from the
+    dashboard data and leave the dashboard untouched.
+    """
+    compact = _compact_charts(charts)
+    return (
+        f"A viewer of the EpiDash dashboard '{dashboard.get('title', '')}' "
+        f"(dashboard_id={dashboard['id']}, slug={dashboard['slug']}) is asking "
+        f"a QUESTION about it.\n\n"
+        f"Current charts (JSON):\n{compact}\n\n"
+        f"Viewer question: {question}\n\n"
+        "Answer the question based on the dashboard's data. This is a "
+        "read-only turn: do NOT use your EpiDash MCP tools to modify the "
+        "dashboard. Reply with a concise, self-contained answer (a short "
+        "paragraph at most); cite the specific numbers or charts you used."
     )
 
 

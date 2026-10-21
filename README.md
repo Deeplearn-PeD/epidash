@@ -71,6 +71,7 @@ In an MCP client (e.g. Claude Desktop, Cursor, EpidBot):
 | `EPIDBOT_BASE_URL` | — | EpidBot base URL; enables the tweak flow |
 | `EPIDBOT_INTERNAL_SECRET` | — | Shared secret (EpidBot `INTERNAL_API_SECRET`) or `ek_` API key |
 | `EPIDASH_TWEAK_RATE_LIMIT_PER_HOUR` | `20` | Per-dashboard viewer tweak budget |
+| `EPIDASH_ASK_RATE_LIMIT_PER_HOUR` | `30` | Per-dashboard viewer question budget |
 | `EPIDASH_TWEAK_TIMEOUT_S` | `300` | Max wait for an EpidBot tweak turn |
 
 ## MCP tools
@@ -98,6 +99,12 @@ A viewer types a request ("show only the Southeast after 2020") into the
 dashboard's chat box. EpiDash forwards it as an EpidBot chat turn with the
 dashboard context; the EpidBot agent uses its EpiDash MCP tools to update
 the charts; the viewer's browser picks up the change on its next poll.
+
+Viewers can also **ask questions** ("why did cases spike in March?") via
+the Ask button — the same chat pipeline, but the prompt instructs EpidBot
+to answer from the dashboard data without modifying it. No authentication
+is required for either; questions are recorded in the `tweaks` table with
+`kind='question'` and rate-limited separately from tweaks.
 
 Requires `EPIDBOT_BASE_URL` + `EPIDBOT_INTERNAL_SECRET` (EpidBot must accept
 `X-Internal-Request` on its chat endpoint — see the EpidBot-side integration

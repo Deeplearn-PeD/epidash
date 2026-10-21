@@ -6,6 +6,7 @@
 - DELETE /api/dashboards/{slug}/like — undo a like
 - GET  /api/dashboards/{slug}/export — download the dashboard as JSON
 - POST /api/dashboards/{slug}/tweak — forward a viewer request to EpidBot
+- POST /api/dashboards/{slug}/ask  — ask EpidBot a question about a dashboard
 - GET  /api/tweaks/{tweak_id}      — poll a tweak's status
 
 (/healthz lives on the root app, see main.py.)
@@ -22,7 +23,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from epidash.config import get_settings
-from epidash.epidbot_client import EpidBotClient, EpidBotError, build_tweak_message
+from epidash.epidbot_client import (
+    EpidBotClient,
+    EpidBotError,
+    build_question_message,
+    build_tweak_message,
+)
 from epidash.logging import get_logger
 from epidash.store import Store
 
@@ -35,6 +41,7 @@ _epidbot: EpidBotClient | None = None
 
 # Sliding-window rate limiter: slug -> list of submission timestamps.
 _tweak_windows: dict[str, list[float]] = {}
+_ask_windows: dict[str, list[float]] = {}
 _like_windows: dict[str, list[float]] = {}
 
 # Like actions per dashboard per hour (likes + unlikes combined).
@@ -200,27 +207,64 @@ async def submit_tweak(slug: str, body: TweakRequest, request: Request) -> Tweak
             status_code=429, detail="Too many tweak requests; try again later"
         )
 
-    tweak = store.create_tweak(dashboard["id"], body.request)
+    tweak = store.create_tweak(dashboard["id"], body.request, kind="tweak")
     asyncio.create_task(_process_tweak(tweak["id"], dashboard, body.request))
     return TweakSubmitted(tweak_id=tweak["id"], status=tweak["status"])
 
 
-async def _process_tweak(tweak_id: str, dashboard: dict, request_text: str) -> None:
-    """Background task: send the tweak turn to EpidBot and record the result."""
+@router.post("/dashboards/{slug}/ask", status_code=202)
+async def ask_about_dashboard(slug: str, body: TweakRequest, request: Request) -> TweakSubmitted:
+    """Viewer question about a published dashboard — an EpidBot chat turn
+    that answers from the dashboard data without modifying it."""
+    store = get_store()
+    dashboard = _get_published(store, slug)
+    settings = get_settings()
+    if not settings.epidbot_configured:
+        raise HTTPException(
+            status_code=503,
+            detail="EpidBot integration is not configured on this server",
+        )
+    if _rate_limited(slug, _ask_windows, settings.ask_rate_limit_per_hour):
+        raise HTTPException(
+            status_code=429, detail="Too many questions; try again later"
+        )
+
+    tweak = store.create_tweak(dashboard["id"], body.request, kind="question")
+    asyncio.create_task(_process_question(tweak["id"], dashboard, body.request))
+    return TweakSubmitted(tweak_id=tweak["id"], status=tweak["status"])
+
+
+async def _process_epidbot_turn(tweak_id: str, message: str, action: str) -> None:
+    """Background task: run one EpidBot chat turn and record the outcome."""
     store = get_store()
     assert _epidbot is not None
     store.update_tweak(tweak_id, status="processing")
-    message = build_tweak_message(dashboard, store.list_charts(dashboard["id"]), request_text)
     try:
         result = await _epidbot.run_tweak(message)
         content = result.get("content") or ""
         store.update_tweak(tweak_id, status="completed", response=content)
     except EpidBotError as e:
-        logger.warning("Tweak %s failed: %s", tweak_id, e)
+        logger.warning("%s %s failed: %s", action, tweak_id, e)
         store.update_tweak(tweak_id, status="failed", error=str(e))
     except Exception as e:  # noqa: BLE001 — never crash the background task
-        logger.error("Tweak %s crashed: %s", tweak_id, e)
+        logger.error("%s %s crashed: %s", action, tweak_id, e)
         store.update_tweak(tweak_id, status="failed", error=f"internal error: {e}")
+
+
+async def _process_tweak(tweak_id: str, dashboard: dict, request_text: str) -> None:
+    """Background task: send the tweak turn to EpidBot and record the result."""
+    message = build_tweak_message(
+        dashboard, get_store().list_charts(dashboard["id"]), request_text
+    )
+    await _process_epidbot_turn(tweak_id, message, "Tweak")
+
+
+async def _process_question(tweak_id: str, dashboard: dict, question: str) -> None:
+    """Background task: send the question turn to EpidBot (read-only)."""
+    message = build_question_message(
+        dashboard, get_store().list_charts(dashboard["id"]), question
+    )
+    await _process_epidbot_turn(tweak_id, message, "Question")
 
 
 @router.get("/tweaks/{tweak_id}")
@@ -231,6 +275,7 @@ async def get_tweak(tweak_id: str) -> dict:
     return {
         "tweak_id": tweak["id"],
         "dashboard_id": tweak["dashboard_id"],
+        "kind": tweak.get("kind", "tweak"),
         "status": tweak["status"],
         "response": tweak["response"],
         "error": tweak["error"],

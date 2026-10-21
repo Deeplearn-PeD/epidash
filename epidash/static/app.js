@@ -18,6 +18,7 @@ const tweakBody = document.getElementById("tweak-body");
 const tweakLog = document.getElementById("tweak-log");
 const tweakInput = document.getElementById("tweak-input");
 const tweakSend = document.getElementById("tweak-send");
+const askSend = document.getElementById("ask-send");
 
 let currentSlug = null;
 let currentDashboard = null;
@@ -460,13 +461,23 @@ function renderChart(el, chart) {
   return renderPlotlyChart(el, kind, data, spec);
 }
 
+function formatKpiValue(value) {
+  // Thousands separators for numbers; non-numeric strings stay as-is.
+  if (value == null || String(value).trim() === "") return String(value ?? "");
+  const n = typeof value === "number" ? value : Number(String(value).trim());
+  if (Number.isFinite(n)) {
+    return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+  return String(value);
+}
+
 function renderKpi(el, data, spec) {
   const delta = data.delta != null && data.delta !== ""
     ? `<span class="kpi-delta ${String(data.delta).trim().startsWith("-") ? "down" : "up"}">${esc(String(data.delta))}</span>`
     : "";
   el.innerHTML = `
     <div class="kpi-row">
-      <span class="kpi-value">${esc(String(data.value))}</span>
+      <span class="kpi-value">${esc(formatKpiValue(data.value))}</span>
       ${data.unit ? `<span class="kpi-unit">${esc(String(data.unit))}</span>` : ""}
       ${delta}
     </div>
@@ -612,27 +623,36 @@ function config() {
 
 tweakToggle.addEventListener("click", () => { tweakBody.hidden = !tweakBody.hidden; });
 
-tweakSend.addEventListener("click", sendTweak);
+tweakSend.addEventListener("click", () => sendTweak("tweak"));
+askSend.addEventListener("click", () => sendTweak("question"));
 tweakInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendTweak(); }
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendTweak("question"); }
 });
 
-async function sendTweak() {
+function setSendBusy(busy) {
+  tweakSend.disabled = busy;
+  askSend.disabled = busy;
+}
+
+async function sendTweak(kind) {
   const request = tweakInput.value.trim();
   if (!request || !currentSlug) return;
-  tweakSend.disabled = true;
+  setSendBusy(true);
   addTweakMsg("user", request);
   tweakInput.value = "";
   try {
-    const res = await api(`/api/dashboards/${encodeURIComponent(currentSlug)}/tweak`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ request }),
-    });
+    const res = await api(
+      `/api/dashboards/${encodeURIComponent(currentSlug)}/${kind === "question" ? "ask" : "tweak"}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request }),
+      }
+    );
     await pollTweak(res.tweak_id);
   } catch (e) {
     addTweakMsg("error", String(e.message || e));
-    tweakSend.disabled = false;
+    setSendBusy(false);
   }
 }
 
@@ -645,26 +665,26 @@ async function pollTweak(tweakId) {
       if (t.status === "completed") {
         clearPendingMsg();
         addTweakMsg("agent", t.response || "Done.");
-        tweakSend.disabled = false;
+        setSendBusy(false);
         return;
       }
       if (t.status === "failed") {
         clearPendingMsg();
         addTweakMsg("error", t.error || "The request failed.");
-        tweakSend.disabled = false;
+        setSendBusy(false);
         return;
       }
       if (Date.now() - started > 6 * 60 * 1000) {
         clearPendingMsg();
         addTweakMsg("error", "Timed out waiting for EpidBot.");
-        tweakSend.disabled = false;
+        setSendBusy(false);
         return;
       }
       setTimeout(tick, 3000);
     } catch (e) {
       clearPendingMsg();
       addTweakMsg("error", String(e.message || e));
-      tweakSend.disabled = false;
+      setSendBusy(false);
     }
   };
   setTimeout(tick, 3000);

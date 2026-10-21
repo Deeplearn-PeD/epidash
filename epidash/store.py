@@ -81,6 +81,12 @@ class Store:
             con.execute(
                 "ALTER TABLE dashboards ADD COLUMN created_by TEXT NOT NULL DEFAULT ''"
             )
+        columns = {r["name"] for r in con.execute("PRAGMA table_info(tweaks)")}
+        if "kind" not in columns:
+            # CHECK constraints can't be added via ALTER TABLE; plain column.
+            con.execute(
+                "ALTER TABLE tweaks ADD COLUMN kind TEXT NOT NULL DEFAULT 'tweak'"
+            )
 
     # ───────────────────────── dashboards ─────────────────────────
 
@@ -420,12 +426,12 @@ class Store:
 
     # ───────────────────────── tweaks ─────────────────────────
 
-    def create_tweak(self, dashboard_id: int, request: str) -> dict:
+    def create_tweak(self, dashboard_id: int, request: str, kind: str = "tweak") -> dict:
         tweak_id = secrets.token_urlsafe(12)
         with self.conn() as con:
             con.execute(
-                "INSERT INTO tweaks (id, dashboard_id, request) VALUES (?, ?, ?)",
-                (tweak_id, dashboard_id, request),
+                "INSERT INTO tweaks (id, dashboard_id, request, kind) VALUES (?, ?, ?, ?)",
+                (tweak_id, dashboard_id, request, kind),
             )
             row = con.execute(
                 "SELECT * FROM tweaks WHERE id = ?", (tweak_id,)

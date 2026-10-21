@@ -82,6 +82,11 @@ class Settings:
         default_factory=lambda: _env_int("EPIDASH_TWEAK_RATE_LIMIT_PER_HOUR", 20)
     )
 
+    #: Viewer questions allowed per dashboard slug per hour (LLM cost guard).
+    ask_rate_limit_per_hour: int = field(
+        default_factory=lambda: _env_int("EPIDASH_ASK_RATE_LIMIT_PER_HOUR", 30)
+    )
+
     #: How long to wait for EpidBot to finish a tweak (seconds).
     tweak_timeout_s: int = field(default_factory=lambda: _env_int("EPIDASH_TWEAK_TIMEOUT_S", 300))
 

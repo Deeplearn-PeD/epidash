@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS tweaks (
     id TEXT PRIMARY KEY,
     dashboard_id INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,
     request TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'tweak' CHECK (kind IN ('tweak', 'question')),
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
     response TEXT,

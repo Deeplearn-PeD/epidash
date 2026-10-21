@@ -203,6 +203,21 @@ class TestLikes:
         assert store.get_likes(d["id"]) == 0
 
 
+class TestTweakKinds:
+    """Tweaks and viewer questions share the table but carry a kind."""
+
+    def test_default_kind_is_tweak(self, store):
+        d = store.create_dashboard("D")
+        t = store.create_tweak(d["id"], "make it red")
+        assert t["kind"] == "tweak"
+
+    def test_question_kind_persisted(self, store):
+        d = store.create_dashboard("D")
+        t = store.create_tweak(d["id"], "what is this?", kind="question")
+        assert t["kind"] == "question"
+        assert store.get_tweak(t["id"])["kind"] == "question"
+
+
 class TestCreatorAttribution:
     """created_by is stored at creation and survives re-reads."""
 
@@ -246,6 +261,48 @@ class TestMigrations:
         assert legacy["created_by"] == ""
         d = s.create_dashboard("New", created_by="epidbot")
         assert d["created_by"] == "epidbot"
+
+    def test_legacy_database_tweaks_gain_kind(self, tmp_path):
+        import sqlite3
+
+        path = str(tmp_path / "legacy-tweaks.db")
+        con = sqlite3.connect(path)
+        con.execute(
+            "CREATE TABLE dashboards ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " slug TEXT NOT NULL UNIQUE,"
+            " title TEXT NOT NULL,"
+            " description TEXT NOT NULL DEFAULT '',"
+            " layout TEXT NOT NULL DEFAULT '{}',"
+            " status TEXT NOT NULL DEFAULT 'draft',"
+            " created_at TEXT NOT NULL DEFAULT '',"
+            " updated_at TEXT NOT NULL DEFAULT '',"
+            " published_at TEXT)"
+        )
+        con.execute(
+            "CREATE TABLE tweaks ("
+            " id TEXT PRIMARY KEY,"
+            " dashboard_id INTEGER NOT NULL,"
+            " request TEXT NOT NULL,"
+            " status TEXT NOT NULL DEFAULT 'pending',"
+            " response TEXT,"
+            " error TEXT,"
+            " epidbot_job_id TEXT,"
+            " created_at TEXT NOT NULL DEFAULT '',"
+            " updated_at TEXT NOT NULL DEFAULT '')"
+        )
+        con.execute("INSERT INTO dashboards (slug, title) VALUES ('old', 'Old')")
+        con.execute(
+            "INSERT INTO tweaks (id, dashboard_id, request) VALUES ('t1', 1, 'fix')"
+        )
+        con.commit()
+        con.close()
+
+        s = Store(path)
+        t = s.get_tweak("t1")
+        assert t["kind"] == "tweak"
+        q = s.create_tweak(1, "why?", kind="question")
+        assert q["kind"] == "question"
 
 
 class TestFreshStore:
