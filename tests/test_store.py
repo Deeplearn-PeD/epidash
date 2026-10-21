@@ -183,6 +183,71 @@ class TestViewCounts:
         assert store.get_view_count(999) == 0
 
 
+class TestLikes:
+    """Like counters upsert, floor at zero, and cascade cleanly."""
+
+    def test_record_and_undo(self, store):
+        d = store.create_dashboard("D")
+        assert store.record_like(d["id"]) == 1
+        assert store.record_like(d["id"]) == 2
+        assert store.remove_like(d["id"]) == 1
+        assert store.get_likes(d["id"]) == 1
+
+    def test_remove_never_goes_negative(self, store):
+        d = store.create_dashboard("D")
+        assert store.remove_like(d["id"]) == 0
+        assert store.remove_like(d["id"]) == 0
+
+    def test_new_dashboard_has_zero_likes(self, store):
+        d = store.create_dashboard("D")
+        assert store.get_likes(d["id"]) == 0
+
+
+class TestCreatorAttribution:
+    """created_by is stored at creation and survives re-reads."""
+
+    def test_create_records_creator(self, store):
+        d = store.create_dashboard("D", created_by="EpidBot")
+        assert d["created_by"] == "EpidBot"
+        assert store.get_dashboard(d["id"])["created_by"] == "EpidBot"
+
+    def test_creator_defaults_to_empty(self, store):
+        assert store.create_dashboard("D")["created_by"] == ""
+
+
+class TestMigrations:
+    """Pre-created_by databases are migrated in place on startup."""
+
+    def test_legacy_database_gains_created_by(self, tmp_path):
+        import sqlite3
+
+        path = str(tmp_path / "legacy.db")
+        con = sqlite3.connect(path)
+        con.execute(
+            "CREATE TABLE dashboards ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " slug TEXT NOT NULL UNIQUE,"
+            " title TEXT NOT NULL,"
+            " description TEXT NOT NULL DEFAULT '',"
+            " layout TEXT NOT NULL DEFAULT '{}',"
+            " status TEXT NOT NULL DEFAULT 'draft',"
+            " created_at TEXT NOT NULL DEFAULT '',"
+            " updated_at TEXT NOT NULL DEFAULT '',"
+            " published_at TEXT)"
+        )
+        con.execute(
+            "INSERT INTO dashboards (slug, title) VALUES ('old', 'Old Dash')"
+        )
+        con.commit()
+        con.close()
+
+        s = Store(path)
+        legacy = s.get_dashboard_by_slug("old")
+        assert legacy["created_by"] == ""
+        d = s.create_dashboard("New", created_by="epidbot")
+        assert d["created_by"] == "epidbot"
+
+
 class TestFreshStore:
     """A brand-new Store instance applies the schema idempotently."""
 

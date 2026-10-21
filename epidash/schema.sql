@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS dashboards (
     description TEXT NOT NULL DEFAULT '',
     layout TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
+    created_by TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     published_at TEXT
@@ -67,4 +68,10 @@ CREATE TABLE IF NOT EXISTS view_counts (
     dashboard_id INTEGER PRIMARY KEY REFERENCES dashboards(id) ON DELETE CASCADE,
     views INTEGER NOT NULL DEFAULT 0,
     last_viewed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS dashboard_likes (
+    dashboard_id INTEGER PRIMARY KEY REFERENCES dashboards(id) ON DELETE CASCADE,
+    likes INTEGER NOT NULL DEFAULT 0,
+    last_liked_at TEXT
 );

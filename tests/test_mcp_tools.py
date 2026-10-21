@@ -62,6 +62,12 @@ class TestDashboardWorkflow:
             stats = await mcp_server.get_view_stats(d["id"])
             assert stats["views"] == 0
 
+    async def test_create_attributes_dashboard_to_key_name(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("Dengue RJ")
+        assert d["created_by"] == "tests"
+
     async def test_list_dashboards_and_audit_log(self, env):
         store, _ = env
         async with keyed_context(store):

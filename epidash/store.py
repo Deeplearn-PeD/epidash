@@ -70,6 +70,17 @@ class Store:
             schema = f.read()
         with self.conn() as con:
             con.executescript(schema)
+            self._migrate(con)
+
+    @staticmethod
+    def _migrate(con: sqlite3.Connection) -> None:
+        """Idempotent in-place migrations for databases created before a
+        schema change (CREATE TABLE IF NOT EXISTS alone won't add columns)."""
+        columns = {r["name"] for r in con.execute("PRAGMA table_info(dashboards)")}
+        if "created_by" not in columns:
+            con.execute(
+                "ALTER TABLE dashboards ADD COLUMN created_by TEXT NOT NULL DEFAULT ''"
+            )
 
     # ───────────────────────── dashboards ─────────────────────────
 
@@ -79,14 +90,15 @@ class Store:
         description: str = "",
         slug: str | None = None,
         layout: dict | None = None,
+        created_by: str = "",
     ) -> dict:
         slug = slug or secrets.token_urlsafe(9)
         with self.conn() as con:
             try:
                 cur = con.execute(
-                    "INSERT INTO dashboards (slug, title, description, layout)"
-                    " VALUES (?, ?, ?, ?)",
-                    (slug, title, description, json.dumps(layout or {})),
+                    "INSERT INTO dashboards (slug, title, description, layout, created_by)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (slug, title, description, json.dumps(layout or {}), created_by),
                 )
             except sqlite3.IntegrityError as e:
                 raise ValueError(f"slug '{slug}' already exists") from e
@@ -272,6 +284,43 @@ class Store:
                 "SELECT views FROM view_counts WHERE dashboard_id = ?", (dashboard_id,)
             ).fetchone()
         return row["views"] if row else 0
+
+    # ───────────────────────── likes ───────────────────────────────
+
+    def _adjust_likes(self, dashboard_id: int, delta: int) -> int:
+        """Apply a like delta and return the new count (floored at 0)."""
+        now = "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+        with self.conn() as con:
+            cur = con.execute(
+                f"UPDATE dashboard_likes SET likes = MAX(likes + ?, 0),"
+                f" last_liked_at = {now} WHERE dashboard_id = ?",
+                (delta, dashboard_id),
+            )
+            if cur.rowcount == 0:
+                con.execute(
+                    f"INSERT INTO dashboard_likes (dashboard_id, likes, last_liked_at)"
+                    f" VALUES (?, MAX(?, 0), {now})",
+                    (dashboard_id, delta),
+                )
+            row = con.execute(
+                "SELECT likes FROM dashboard_likes WHERE dashboard_id = ?",
+                (dashboard_id,),
+            ).fetchone()
+        return row["likes"]
+
+    def record_like(self, dashboard_id: int) -> int:
+        return self._adjust_likes(dashboard_id, +1)
+
+    def remove_like(self, dashboard_id: int) -> int:
+        return self._adjust_likes(dashboard_id, -1)
+
+    def get_likes(self, dashboard_id: int) -> int:
+        with self.conn() as con:
+            row = con.execute(
+                "SELECT likes FROM dashboard_likes WHERE dashboard_id = ?",
+                (dashboard_id,),
+            ).fetchone()
+        return row["likes"] if row else 0
 
     # ───────────────────────── control keys ─────────────────────────
 

@@ -243,10 +243,16 @@ async def create_dashboard(
 ) -> dict:
     """Create a dashboard in draft status. Returns its id and public slug.
     slug: optional URL-safe identifier (random when omitted). layout:
-    free-form options dict (e.g. {"theme": "dark"})."""
+    free-form options dict (e.g. {"theme": "dark"}). The control key's
+    name is recorded as the dashboard's creator."""
     try:
+        try:
+            creator = get_current_key().get("name", "")
+        except RuntimeError:
+            creator = ""
         return _get_store().create_dashboard(
-            title=title, description=description, slug=slug, layout=layout
+            title=title, description=description, slug=slug, layout=layout,
+            created_by=creator,
         )
     except ValueError as e:
         raise ToolError(str(e)) from e
