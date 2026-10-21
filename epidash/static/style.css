@@ -32,12 +32,16 @@ body {
 }
 
 .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   font-size: 20px;
   font-weight: 700;
   color: var(--text);
   text-decoration: none;
   letter-spacing: 0.3px;
 }
+.brand-logo { height: 26px; width: auto; display: block; }
 .brand span { color: var(--accent); }
 
 .status-badge {
