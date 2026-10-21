@@ -1,0 +1,27 @@
+services:
+  epidash:
+    build: .
+    image: epidash:latest
+    container_name: epidash
+    ports:
+      - '127.0.0.1:8310:8000'
+    volumes:
+      - ./data:/data
+    environment:
+      - EPIDASH_DB_PATH=/data/epidash.db
+      - EPIDASH_BASE_URL=${EPIDASH_BASE_URL:-http://localhost:8310}
+      - EPIDASH_ALLOWED_HOSTS=${EPIDASH_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      - EPIDASH_BOOTSTRAP_KEY=${EPIDASH_BOOTSTRAP_KEY:-}
+      - EPIDBOT_BASE_URL=${EPIDBOT_BASE_URL:-}
+      - EPIDBOT_INTERNAL_SECRET=${EPIDBOT_INTERNAL_SECRET:-}
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

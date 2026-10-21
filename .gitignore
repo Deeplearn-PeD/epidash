@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+
+# Local state
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Tooling
+.pytest_cache/
+.ty/
+.ruff_cache/
+
+# Secrets
+.env
+.env.local

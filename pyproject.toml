@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "epidash"
+version = "0.1.0"
+description = "EpiDash — light MCP-controlled dashboard service: EpidBot publishes and controls dashboards via MCP"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.115.0",
+    "httpx>=0.28.0",
+    # 1.x API (mcp.server.fastmcp.FastMCP) — EpidBot parity; 2.x renamed it.
+    "mcp>=1.10,<2",
+    "pydantic>=2.9",
+    "uvicorn[standard]>=0.32.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ty>=0.0.1a5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "ty>=0.0.1a5",
+]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["epidash"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ty.src]
+include = ["epidash"]
