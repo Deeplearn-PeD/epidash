@@ -20,8 +20,29 @@ const tweakInput = document.getElementById("tweak-input");
 const tweakSend = document.getElementById("tweak-send");
 
 let currentSlug = null;
+let currentDashboard = null;
 let pollTimer = null;
 let tweaksEnabled = false;
+
+const HEART_SVG =
+  '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">' +
+  '<path class="heart-path" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 ' +
+  '2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 ' +
+  '19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>' +
+  "</svg>";
+
+const LIKED_STORAGE_KEY = "epidash-liked-dashboards";
+
+function likedSet() {
+  try { return new Set(JSON.parse(localStorage.getItem(LIKED_STORAGE_KEY) || "[]")); }
+  catch (_) { return new Set(); }
+}
+
+function setLiked(slug, liked) {
+  const set = likedSet();
+  if (liked) set.add(slug); else set.delete(slug);
+  localStorage.setItem(LIKED_STORAGE_KEY, JSON.stringify([...set]));
+}
 
 // ───────────────────────────── routing ─────────────────────────────
 
@@ -42,27 +63,50 @@ window.addEventListener("hashchange", route);
 
 async function showHome() {
   currentSlug = null;
+  currentDashboard = null;
   tweaksEnabled = false;
   tweakPanel.hidden = true;
   document.getElementById("dash-status").hidden = true;
-  app.innerHTML = '<div class="home"><h1>Published dashboards</h1><div id="list" class="dash-grid"></div></div>';
+  app.innerHTML =
+    '<div class="home">' +
+    '<div class="home-head"><h1>Published dashboards</h1>' +
+    '<input id="dash-search" type="search" placeholder="Search dashboards…" aria-label="Search dashboards"></div>' +
+    '<div id="list" class="dash-grid"></div></div>';
+  let dashboards;
   try {
-    const dashboards = await api("/api/dashboards");
-    const list = document.getElementById("list");
-    if (!dashboards.length) {
-      list.innerHTML = '<p class="empty">No published dashboards yet.</p>';
+    dashboards = await api("/api/dashboards");
+  } catch (e) {
+    app.innerHTML = `<p class="empty">Failed to load dashboards: ${esc(String(e))}</p>`;
+    return;
+  }
+  const list = document.getElementById("list");
+  const search = document.getElementById("dash-search");
+  const paint = () => {
+    const q = (search.value || "").trim().toLowerCase();
+    const matches = dashboards.filter((d) =>
+      !q ||
+      (d.title || "").toLowerCase().includes(q) ||
+      (d.description || "").toLowerCase().includes(q) ||
+      (d.created_by || "").toLowerCase().includes(q)
+    );
+    list.innerHTML = "";
+    if (!matches.length) {
+      list.innerHTML = `<p class="empty">${dashboards.length ? "No dashboards match your search." : "No published dashboards yet."}</p>`;
       return;
     }
-    for (const d of dashboards) {
+    for (const d of matches) {
       const a = document.createElement("a");
       a.className = "dash-card";
       a.href = `#/d/${d.slug}`;
-      a.innerHTML = `<h3>${esc(d.title)}</h3><p>${esc(d.description || "")}</p>`;
+      const by = d.created_by ? `<span class="dash-card-by">by ${esc(d.created_by)}</span>` : "<span></span>";
+      a.innerHTML =
+        `<h3>${esc(d.title)}</h3><p>${esc(d.description || "")}</p>` +
+        `<p class="dash-card-meta">${by}<span>♥ ${d.likes ?? 0}</span></p>`;
       list.appendChild(a);
     }
-  } catch (e) {
-    app.innerHTML = `<p class="empty">Failed to load dashboards: ${esc(String(e))}</p>`;
-  }
+  };
+  search.addEventListener("input", paint);
+  paint();
 }
 
 // ───────────────────────────── dashboard ───────────────────────────
@@ -74,10 +118,12 @@ async function showDashboard(slug) {
   try {
     data = await api(`/api/dashboards/${encodeURIComponent(slug)}`);
   } catch (e) {
+    currentDashboard = null;
     app.innerHTML = '<p class="empty">Dashboard not found or not published.</p>';
     tweakPanel.hidden = true;
     return;
   }
+  currentDashboard = data;
 
   tweaksEnabled = !!data.tweaks_enabled;
   tweakLog.innerHTML = "";
@@ -89,12 +135,33 @@ async function showDashboard(slug) {
   status.classList.add("live");
   status.textContent = "live";
 
+  const byLine = data.created_by ? `by ${esc(data.created_by)}` : "";
   app.innerHTML = `
     <div class="dash-head">
-      <h1>${esc(data.title)}</h1>
+      <a class="back-link" href="#/">← All dashboards</a>
+      <div class="dash-title-row">
+        <h1>${esc(data.title)}</h1>
+        <div class="dash-actions">
+          <button id="like-btn" class="action-btn like-btn" title="Like this dashboard">
+            ${HEART_SVG}<span id="like-count">${data.likes ?? 0}</span>
+          </button>
+          <div class="export-wrap">
+            <button id="export-btn" class="action-btn" title="Export this dashboard">⬇ Export</button>
+            <div id="export-menu" class="export-menu" hidden>
+              <button data-export="png">PNG image</button>
+              <button data-export="pdf">PDF (print)</button>
+              <button data-export="json">JSON data</button>
+            </div>
+          </div>
+          <button id="share-btn" class="action-btn" title="Copy a shareable link to this dashboard">🔗 Permalink</button>
+        </div>
+      </div>
+      <p class="dash-byline">${byLine}</p>
       <p>${esc(data.description || "")}</p>
     </div>
     <div class="chart-grid" id="charts"></div>`;
+
+  wireDashActions(slug, data.likes ?? 0);
   const grid = document.getElementById("charts");
 
   const charts = [...data.charts].sort(
@@ -114,6 +181,251 @@ async function showDashboard(slug) {
   }
 
   if (tweaksEnabled) pollForUpdates(data.updated_at);
+}
+
+function wireDashActions(slug, serverLikes) {
+  const likeBtn = document.getElementById("like-btn");
+  const likeCount = document.getElementById("like-count");
+  const shareBtn = document.getElementById("share-btn");
+  let likes = serverLikes;
+  let busy = false;
+
+  const paint = (liked) => {
+    likeCount.textContent = likes;
+    likeBtn.classList.toggle("liked", liked);
+    likeBtn.title = liked ? "Unlike this dashboard" : "Like this dashboard";
+  };
+
+  let liked = likedSet().has(slug);
+  // reconcile: a stored like that the server no longer counts was reset
+  if (liked && likes === 0) { setLiked(slug, false); liked = false; }
+  paint(liked);
+
+  likeBtn.addEventListener("click", async () => {
+    if (busy) return;
+    busy = true;
+    const goingToLike = !liked;
+    likeCount.textContent = likes + (goingToLike ? 1 : -1); // optimistic
+    try {
+      const res = await api(`/api/dashboards/${encodeURIComponent(slug)}/like`, {
+        method: goingToLike ? "POST" : "DELETE",
+      });
+      likes = res.likes;
+      liked = goingToLike;
+      setLiked(slug, liked);
+    } catch (_) { /* keep server truth on failure */ }
+    paint(liked);
+    busy = false;
+  });
+
+  shareBtn.addEventListener("click", async () => {
+    const url = `${location.origin}/#/d/${encodeURIComponent(slug)}`;
+    const original = shareBtn.textContent;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(url);
+      } else {
+        const ta = document.createElement("textarea");
+        ta.value = url;
+        ta.style.position = "fixed";
+        ta.style.opacity = "0";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+      }
+      shareBtn.textContent = "✓ Copied!";
+    } catch (_) {
+      shareBtn.textContent = url;
+    }
+    shareBtn.disabled = true;
+    setTimeout(() => {
+      shareBtn.textContent = original;
+      shareBtn.disabled = false;
+    }, 1600);
+  });
+
+  const exportBtn = document.getElementById("export-btn");
+  const exportMenu = document.getElementById("export-menu");
+  exportBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    exportMenu.hidden = !exportMenu.hidden;
+  });
+  document.addEventListener("click", (e) => {
+    if (!exportMenu.hidden && !exportMenu.contains(e.target)) exportMenu.hidden = true;
+  });
+  exportMenu.querySelectorAll("button").forEach((b) => {
+    b.addEventListener("click", async () => {
+      exportMenu.hidden = true;
+      if (b.dataset.export === "png") {
+        exportBtn.disabled = true;
+        try { await exportPng(); } finally { exportBtn.disabled = false; }
+      } else if (b.dataset.export === "pdf") {
+        window.print();
+      } else {
+        location.href = `/api/dashboards/${encodeURIComponent(slug)}/export`;
+      }
+    });
+  });
+}
+
+// ───────────────────────────── export ──────────────────────────────
+
+const EXPORT_WIDTH = 1320;
+const CARD_X = 48;
+const CARD_PAD = 22;
+const EXPORT_FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+
+async function exportPng() {
+  const data = currentDashboard;
+  if (!data) return;
+  const canvas = document.createElement("canvas");
+  canvas.width = EXPORT_WIDTH;
+  canvas.height = 8000;
+  const ctx = canvas.getContext("2d");
+  ctx.textBaseline = "top";
+  ctx.fillStyle = "#0d1117";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  let y = 52;
+  ctx.fillStyle = "#e6edf3";
+  ctx.font = `700 32px ${EXPORT_FONT}`;
+  ctx.fillText(data.title, CARD_X, y);
+  y += 46;
+  ctx.fillStyle = "#8b949e";
+  ctx.font = `16px ${EXPORT_FONT}`;
+  const by = data.created_by ? `by ${data.created_by} · ` : "";
+  ctx.fillText(`${by}${new Date().toLocaleDateString()}`, CARD_X, y);
+  y += 44;
+
+  for (const card of document.querySelectorAll(".chart-card")) {
+    const title = card.querySelector("h2").textContent;
+    const plotEl = card.querySelector(".plot");
+    const contentW = EXPORT_WIDTH - 2 * CARD_X - 2 * CARD_PAD;
+    let draw = null; // (ctx, x, y) -> void, given content-area coords
+    let contentH = 0;
+
+    if (plotEl && plotEl.data) {
+      const imgH = Math.max(
+        1, Math.round(plotEl.clientHeight * (contentW / Math.max(plotEl.clientWidth, 1)))
+      );
+      const url = await Plotly.toImage(plotEl, {
+        format: "png", width: contentW, height: imgH, scale: 2,
+      });
+      const img = await loadImage(url);
+      contentH = imgH;
+      draw = (c, x, dy) => c.drawImage(img, x, dy, contentW, imgH);
+    } else {
+      const kpi = card.querySelector(".kpi-row");
+      const table = card.querySelector(".data-table");
+      if (kpi) { contentH = 96; draw = drawKpi(null, kpi); }
+      else if (table) {
+        const rows = table.querySelectorAll("tbody tr").length;
+        contentH = 30 + Math.min(rows, 40) * 26 + (rows > 40 ? 22 : 0);
+        draw = drawTable(table);
+      } else continue;
+    }
+
+    const cardH = 2 * CARD_PAD + 30 + contentH;
+    ctx.fillStyle = "#161b22";
+    ctx.fillRect(CARD_X, y, EXPORT_WIDTH - 2 * CARD_X, cardH);
+    ctx.strokeStyle = "#30363d";
+    ctx.strokeRect(CARD_X + 0.5, y + 0.5, EXPORT_WIDTH - 2 * CARD_X - 1, cardH - 1);
+    ctx.fillStyle = "#8b949e";
+    ctx.font = `600 17px ${EXPORT_FONT}`;
+    ctx.fillText(title, CARD_X + CARD_PAD, y + CARD_PAD);
+    draw(ctx, CARD_X + CARD_PAD, y + CARD_PAD + 30);
+    y += cardH + 24;
+    if (y > canvas.height - 600) break; // safety cap
+  }
+
+  // trim to content
+  const finalH = Math.ceil(y) + 52;
+  const out = document.createElement("canvas");
+  out.width = EXPORT_WIDTH;
+  out.height = finalH;
+  out.getContext("2d").drawImage(canvas, 0, 0);
+  const a = document.createElement("a");
+  a.href = out.toDataURL("image/png");
+  a.download = `${currentSlug || "dashboard"}.png`;
+  a.click();
+}
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = url;
+  });
+}
+
+function drawKpi(_, kpiEl) {
+  const value = kpiEl.querySelector(".kpi-value")?.textContent || "";
+  const unit = kpiEl.querySelector(".kpi-unit")?.textContent || "";
+  const delta = kpiEl.querySelector(".kpi-delta")?.textContent || "";
+  const label = kpiEl.parentElement.querySelector(".kpi-label")?.textContent || "";
+  return (ctx, x, y) => {
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#4ade80";
+    ctx.font = `700 54px ${EXPORT_FONT}`;
+    ctx.fillText(value, x, y);
+    let cx = x + ctx.measureText(value).width + 12;
+    if (unit) {
+      ctx.fillStyle = "#8b949e";
+      ctx.font = `20px ${EXPORT_FONT}`;
+      ctx.fillText(unit, cx, y + 26);
+      cx += ctx.measureText(unit).width + 12;
+    }
+    if (delta) {
+      ctx.fillStyle = delta.trim().startsWith("-") ? "#f85149" : "#4ade80";
+      ctx.font = `600 18px ${EXPORT_FONT}`;
+      ctx.fillText(delta, cx, y + 26);
+    }
+    if (label) {
+      ctx.fillStyle = "#8b949e";
+      ctx.font = `15px ${EXPORT_FONT}`;
+      ctx.fillText(label, x, y + 66);
+    }
+  };
+}
+
+function drawTable(tableEl) {
+  const headers = [...tableEl.querySelectorAll("thead th")].map((th) => th.textContent);
+  const rows = [...tableEl.querySelectorAll("tbody tr")].map((tr) =>
+    [...tr.querySelectorAll("td")].map((td) => td.textContent)
+  );
+  const ncols = Math.max(headers.length, ...(rows.length ? rows.map((r) => r.length) : [1]));
+  return (ctx, x, y) => {
+    ctx.textBaseline = "top";
+    const colW = (EXPORT_WIDTH - 2 * CARD_X - 2 * CARD_PAD) / ncols;
+    const clip = (text, cx, w) => {
+      let t = text;
+      if (ctx.measureText(t).width > w - 12) {
+        while (t.length > 1 && ctx.measureText(t + "…").width > w - 12) t = t.slice(0, -1);
+        t += "…";
+      }
+      ctx.fillText(t, cx, y);
+    };
+    ctx.font = `600 13px ${EXPORT_FONT}`;
+    headers.forEach((h, i) => {
+      ctx.fillStyle = "#8b949e";
+      clip(h, x + i * colW, colW);
+    });
+    ctx.font = `13px ${EXPORT_FONT}`;
+    rows.slice(0, 40).forEach((row, r) => {
+      const ry = y + 30 + r * 26;
+      row.forEach((cell, i) => {
+        ctx.fillStyle = "#e6edf3";
+        clip(String(cell), x + i * colW, colW);
+      });
+    });
+    if (rows.length > 40) {
+      ctx.fillStyle = "#8b949e";
+      ctx.font = `12px ${EXPORT_FONT}`;
+      ctx.fillText(`+ ${rows.length - 40} more rows`, x, y + 30 + 40 * 26);
+    }
+  };
 }
 
 async function pollForUpdates(since) {
@@ -280,7 +592,20 @@ function baseLayout(spec) {
 }
 
 function config() {
-  return { responsive: true, displayModeBar: false };
+  return {
+    responsive: true,
+    // modebar appears on hover; gives zoom/pan plus "Reset axes"
+    // (cartesian) and reset-view buttons for geo maps. Double-click
+    // also resets the view.
+    displayModeBar: true,
+    displaylogo: false,
+    scrollZoom: true,
+    modeBarButtonsToRemove: [
+      "select2d", "lasso2d",
+      "hoverClosestCartesian", "hoverCompareCartesian",
+      "toggleSpikelines",
+    ],
+  };
 }
 
 // ───────────────────────────── tweak panel ─────────────────────────
