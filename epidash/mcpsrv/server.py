@@ -48,6 +48,11 @@ _cfg = get_settings()
 mcp = FastMCP(
     _cfg.server_name,
     streamable_http_path=_cfg.mcp_path,
+    # Stateless mode: every POST is self-contained (no initialize/session
+    # handshake). The right choice for a machine-to-machine control surface
+    # — clients (EpidBot) stay as simple stateless JSON-RPC callers and
+    # there is no session state to leak between callers.
+    stateless_http=True,
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=_cfg.dns_rebinding_protection,
         allowed_hosts=_cfg.allowed_hosts,
