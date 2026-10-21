@@ -26,6 +26,20 @@ class TestHealthz:
         assert res.json() == {"status": "ok"}
 
 
+class TestStaticCaching:
+    """Static assets must revalidate so deploys reach viewers immediately."""
+
+    async def test_static_assets_send_no_cache(self, client):
+        for path in ("/", "/app.js", "/style.css"):
+            res = client.get(path)
+            assert res.status_code == 200
+            assert res.headers["cache-control"] == "no-cache"
+
+    async def test_api_has_no_static_cache_header(self, client):
+        res = client.get("/api/dashboards")
+        assert res.headers.get("cache-control") != "no-cache"
+
+
 class TestPublishedDashboardExposure:
     """Drafts stay hidden; published dashboards are fully served."""
 

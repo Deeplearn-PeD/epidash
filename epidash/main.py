@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from starlette.datastructures import MutableHeaders
 from starlette.routing import Mount as StarletteMount, Route as StarletteRoute
 from starlette.staticfiles import StaticFiles
 
@@ -26,6 +27,35 @@ from epidash.store import Store
 logger = get_logger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
+
+# Path prefixes handled by non-static routers (excluded from the
+# no-cache middleware below).
+_DYNAMIC_PREFIXES = ("/api/", "/mcp", "/healthz")
+
+
+class NoCacheStaticMiddleware:
+    """Force browsers to revalidate static assets on every load.
+
+    Without a Cache-Control header, browsers heuristic-cache app.js /
+    style.css for a long time and viewers keep seeing a stale UI after
+    deploys. `no-cache` still allows cheap 304 responses via ETag.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["path"].startswith(_DYNAMIC_PREFIXES):
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_cache_control(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["Cache-Control"] = "no-cache"
+            await send(message)
+
+        await self.app(scope, receive, send_with_cache_control)
 
 
 def seed_bootstrap_key(store: Store, raw_key: str) -> None:
@@ -81,6 +111,10 @@ def create_app(store: Store | None = None, *, run_mcp_lifespan: bool = True) -> 
         )
 
     app = FastAPI(title="EpiDash", version="0.1.0", lifespan=lifespan)
+
+    # Outermost: static assets must always be revalidated so UI changes
+    # land for viewers as soon as the container is redeployed.
+    app.add_middleware(NoCacheStaticMiddleware)
 
     add_mcp_routes(app.router.routes, store)
 

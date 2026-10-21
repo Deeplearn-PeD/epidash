@@ -228,22 +228,15 @@ main { max-width: 1280px; margin: 0 auto; padding: 28px 24px 80px; }
   z-index: 50;
 }
 #tweak-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  width: 100%;
-  padding: 8px 14px;
-  border-radius: 10px;
-  border: 1px solid var(--accent);
-  background: var(--surface);
-  color: var(--accent);
-  font-size: 14px;
-  font-weight: 600;
+  display: block;
+  margin-left: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
   cursor: pointer;
 }
-.tweak-logo { height: 22px; width: auto; display: block; }
-#tweak-toggle:hover { background: var(--surface-2); }
+#tweak-toggle:hover { opacity: 0.85; }
+.tweak-logo { height: 44px; width: 44px; display: block; border-radius: 10px; }
 #tweak-body {
   margin-top: 8px;
   background: var(--surface);
