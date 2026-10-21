@@ -272,82 +272,91 @@ function wireDashActions(slug, serverLikes) {
 
 // ───────────────────────────── export ──────────────────────────────
 
-const EXPORT_WIDTH = 1320;
-const CARD_X = 48;
-const CARD_PAD = 22;
 const EXPORT_FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
+const EXPORT_MARGIN = 40;
+const EXPORT_HEADER_H = 118;
+const EXPORT_MAX_H = 16000; // stay under browser canvas limits
 
 async function exportPng() {
   const data = currentDashboard;
-  if (!data) return;
+  const grid = document.getElementById("charts");
+  if (!data || !grid) return;
+
+  const gridRect = grid.getBoundingClientRect();
+  const W = Math.round(gridRect.width) + EXPORT_MARGIN * 2;
+  const H = Math.min(
+    Math.round(gridRect.height) + EXPORT_HEADER_H + EXPORT_MARGIN,
+    EXPORT_MAX_H
+  );
   const canvas = document.createElement("canvas");
-  canvas.width = EXPORT_WIDTH;
-  canvas.height = 8000;
+  canvas.width = W;
+  canvas.height = H;
   const ctx = canvas.getContext("2d");
   ctx.textBaseline = "top";
   ctx.fillStyle = "#0d1117";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillRect(0, 0, W, H);
 
-  let y = 52;
+  // header
+  let y = EXPORT_MARGIN;
   ctx.fillStyle = "#e6edf3";
-  ctx.font = `700 32px ${EXPORT_FONT}`;
-  ctx.fillText(data.title, CARD_X, y);
-  y += 46;
+  ctx.font = `700 26px ${EXPORT_FONT}`;
+  ctx.fillText(data.title, EXPORT_MARGIN, y);
+  y += 36;
   ctx.fillStyle = "#8b949e";
-  ctx.font = `16px ${EXPORT_FONT}`;
+  ctx.font = `14px ${EXPORT_FONT}`;
   const by = data.created_by ? `by ${data.created_by} · ` : "";
-  ctx.fillText(`${by}${new Date().toLocaleDateString()}`, CARD_X, y);
-  y += 44;
-
-  for (const card of document.querySelectorAll(".chart-card")) {
-    const title = card.querySelector("h2").textContent;
-    const plotEl = card.querySelector(".plot");
-    const contentW = EXPORT_WIDTH - 2 * CARD_X - 2 * CARD_PAD;
-    let draw = null; // (ctx, x, y) -> void, given content-area coords
-    let contentH = 0;
-
-    if (plotEl && plotEl.data) {
-      const imgH = Math.max(
-        1, Math.round(plotEl.clientHeight * (contentW / Math.max(plotEl.clientWidth, 1)))
-      );
-      const url = await Plotly.toImage(plotEl, {
-        format: "png", width: contentW, height: imgH, scale: 2,
-      });
-      const img = await loadImage(url);
-      contentH = imgH;
-      draw = (c, x, dy) => c.drawImage(img, x, dy, contentW, imgH);
-    } else {
-      const kpi = card.querySelector(".kpi-row");
-      const table = card.querySelector(".data-table");
-      if (kpi) { contentH = 96; draw = drawKpi(null, kpi); }
-      else if (table) {
-        const rows = table.querySelectorAll("tbody tr").length;
-        contentH = 30 + Math.min(rows, 40) * 26 + (rows > 40 ? 22 : 0);
-        draw = drawTable(table);
-      } else continue;
-    }
-
-    const cardH = 2 * CARD_PAD + 30 + contentH;
-    ctx.fillStyle = "#161b22";
-    ctx.fillRect(CARD_X, y, EXPORT_WIDTH - 2 * CARD_X, cardH);
-    ctx.strokeStyle = "#30363d";
-    ctx.strokeRect(CARD_X + 0.5, y + 0.5, EXPORT_WIDTH - 2 * CARD_X - 1, cardH - 1);
-    ctx.fillStyle = "#8b949e";
-    ctx.font = `600 17px ${EXPORT_FONT}`;
-    ctx.fillText(title, CARD_X + CARD_PAD, y + CARD_PAD);
-    draw(ctx, CARD_X + CARD_PAD, y + CARD_PAD + 30);
-    y += cardH + 24;
-    if (y > canvas.height - 600) break; // safety cap
+  ctx.fillText(`${by}${new Date().toLocaleDateString()}`, EXPORT_MARGIN, y);
+  if (data.description) {
+    y += 24;
+    ctx.fillText(String(data.description).slice(0, 200), EXPORT_MARGIN, y);
   }
 
-  // trim to content
-  const finalH = Math.ceil(y) + 52;
-  const out = document.createElement("canvas");
-  out.width = EXPORT_WIDTH;
-  out.height = finalH;
-  out.getContext("2d").drawImage(canvas, 0, 0);
+  // DOM-position helpers: everything is painted 1:1 where it sits on the page
+  const gridTop = EXPORT_MARGIN + EXPORT_HEADER_H;
+  const rel = (el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      x: r.left - gridRect.left + EXPORT_MARGIN,
+      y: r.top - gridRect.top + gridTop,
+      w: r.width,
+      h: r.height,
+    };
+  };
+
+  for (const card of grid.querySelectorAll(".chart-card")) {
+    const c = rel(card);
+    if (c.y + c.h > H) break; // beyond canvas cap
+    ctx.fillStyle = "#161b22";
+    ctx.fillRect(c.x, c.y, c.w, c.h);
+    ctx.strokeStyle = "#30363d";
+    ctx.strokeRect(c.x + 0.5, c.y + 0.5, c.w - 1, c.h - 1);
+    ctx.fillStyle = "#8b949e";
+    ctx.font = `600 15px ${EXPORT_FONT}`;
+    ctx.fillText(card.querySelector("h2").textContent, c.x + 18, c.y + 18);
+
+    const plotEl = card.querySelector(".plot");
+    if (plotEl && plotEl.data) {
+      // rasterize the chart at its on-screen size (scale 2 for crispness)
+      const p = rel(plotEl);
+      const img = await loadImage(
+        await Plotly.toImage(plotEl, {
+          format: "png",
+          width: Math.max(1, Math.round(p.w)),
+          height: Math.max(1, Math.round(p.h)),
+          scale: 2,
+        })
+      );
+      ctx.drawImage(img, p.x, p.y, p.w, p.h);
+      continue;
+    }
+    const kpi = card.querySelector(".kpi-row");
+    const table = card.querySelector(".data-table");
+    if (kpi) drawKpiCard(ctx, kpi, rel);
+    else if (table) drawTableCard(ctx, table, rel, H);
+  }
+
   const a = document.createElement("a");
-  a.href = out.toDataURL("image/png");
+  a.href = canvas.toDataURL("image/png");
   a.download = `${currentSlug || "dashboard"}.png`;
   a.click();
 }
@@ -361,72 +370,75 @@ function loadImage(url) {
   });
 }
 
-function drawKpi(_, kpiEl) {
-  const value = kpiEl.querySelector(".kpi-value")?.textContent || "";
-  const unit = kpiEl.querySelector(".kpi-unit")?.textContent || "";
-  const delta = kpiEl.querySelector(".kpi-delta")?.textContent || "";
-  const label = kpiEl.parentElement.querySelector(".kpi-label")?.textContent || "";
-  return (ctx, x, y) => {
-    ctx.textBaseline = "top";
+function drawKpiCard(ctx, kpiEl, rel) {
+  const value = kpiEl.querySelector(".kpi-value");
+  const unit = kpiEl.querySelector(".kpi-unit");
+  const delta = kpiEl.querySelector(".kpi-delta");
+  const label = kpiEl.parentElement.querySelector(".kpi-label");
+
+  if (value) {
+    const r = rel(value);
     ctx.fillStyle = "#4ade80";
-    ctx.font = `700 54px ${EXPORT_FONT}`;
-    ctx.fillText(value, x, y);
-    let cx = x + ctx.measureText(value).width + 12;
+    ctx.font = `700 40px ${EXPORT_FONT}`;
+    ctx.fillText(value.textContent, r.x, r.y);
+    let cx = r.x + ctx.measureText(value.textContent).width + 10;
     if (unit) {
       ctx.fillStyle = "#8b949e";
-      ctx.font = `20px ${EXPORT_FONT}`;
-      ctx.fillText(unit, cx, y + 26);
-      cx += ctx.measureText(unit).width + 12;
+      ctx.font = `16px ${EXPORT_FONT}`;
+      ctx.fillText(unit.textContent, cx, r.y + 14);
+      cx += ctx.measureText(unit.textContent).width + 10;
     }
     if (delta) {
-      ctx.fillStyle = delta.trim().startsWith("-") ? "#f85149" : "#4ade80";
-      ctx.font = `600 18px ${EXPORT_FONT}`;
-      ctx.fillText(delta, cx, y + 26);
+      ctx.fillStyle = delta.textContent.trim().startsWith("-") ? "#f85149" : "#4ade80";
+      ctx.font = `600 14px ${EXPORT_FONT}`;
+      ctx.fillText(delta.textContent, cx, r.y + 16);
     }
-    if (label) {
-      ctx.fillStyle = "#8b949e";
-      ctx.font = `15px ${EXPORT_FONT}`;
-      ctx.fillText(label, x, y + 66);
-    }
-  };
+  }
+  if (label) {
+    const r = rel(label);
+    ctx.fillStyle = "#8b949e";
+    ctx.font = `13px ${EXPORT_FONT}`;
+    ctx.fillText(label.textContent, r.x, r.y);
+  }
 }
 
-function drawTable(tableEl) {
-  const headers = [...tableEl.querySelectorAll("thead th")].map((th) => th.textContent);
-  const rows = [...tableEl.querySelectorAll("tbody tr")].map((tr) =>
-    [...tr.querySelectorAll("td")].map((td) => td.textContent)
-  );
-  const ncols = Math.max(headers.length, ...(rows.length ? rows.map((r) => r.length) : [1]));
-  return (ctx, x, y) => {
-    ctx.textBaseline = "top";
-    const colW = (EXPORT_WIDTH - 2 * CARD_X - 2 * CARD_PAD) / ncols;
-    const clip = (text, cx, w) => {
-      let t = text;
-      if (ctx.measureText(t).width > w - 12) {
-        while (t.length > 1 && ctx.measureText(t + "…").width > w - 12) t = t.slice(0, -1);
-        t += "…";
-      }
-      ctx.fillText(t, cx, y);
-    };
-    ctx.font = `600 13px ${EXPORT_FONT}`;
-    headers.forEach((h, i) => {
-      ctx.fillStyle = "#8b949e";
-      clip(h, x + i * colW, colW);
+function drawTableCard(ctx, tableEl, rel, canvasH) {
+  const headCells = [...tableEl.querySelectorAll("thead th")];
+  const rows = [...tableEl.querySelectorAll("tbody tr")];
+  if (!headCells.length || !rows.length) return;
+
+  // column geometry from the real header cells
+  const cols = headCells.map((th) => {
+    const r = rel(th);
+    return { x: r.x, y: r.y, w: r.w, label: th.textContent };
+  });
+  const rowH = rel(rows[0]).h || 34;
+
+  ctx.font = `600 13px ${EXPORT_FONT}`;
+  cols.forEach((col) => {
+    ctx.fillStyle = "#8b949e";
+    drawClipped(ctx, col.label, col.x + 10, cols[0].y + 9, col.w);
+  });
+
+  ctx.font = `13px ${EXPORT_FONT}`;
+  for (const tr of rows) {
+    const ry = rel(tr).y;
+    if (ry > canvasH - 40) break;
+    [...tr.querySelectorAll("td")].forEach((td, i) => {
+      if (i >= cols.length) return;
+      ctx.fillStyle = "#e6edf3";
+      drawClipped(ctx, td.textContent, cols[i].x + 10, ry + 9, cols[i].w);
     });
-    ctx.font = `13px ${EXPORT_FONT}`;
-    rows.slice(0, 40).forEach((row, r) => {
-      const ry = y + 30 + r * 26;
-      row.forEach((cell, i) => {
-        ctx.fillStyle = "#e6edf3";
-        clip(String(cell), x + i * colW, colW);
-      });
-    });
-    if (rows.length > 40) {
-      ctx.fillStyle = "#8b949e";
-      ctx.font = `12px ${EXPORT_FONT}`;
-      ctx.fillText(`+ ${rows.length - 40} more rows`, x, y + 30 + 40 * 26);
-    }
-  };
+  }
+}
+
+function drawClipped(ctx, text, x, y, maxW) {
+  let t = String(text);
+  if (ctx.measureText(t).width > maxW - 12) {
+    while (t.length > 1 && ctx.measureText(t + "…").width > maxW - 12) t = t.slice(0, -1);
+    t += "…";
+  }
+  ctx.fillText(t, x, y);
 }
 
 async function pollForUpdates(since) {
