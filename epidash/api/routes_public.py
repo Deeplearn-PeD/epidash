@@ -127,10 +127,20 @@ async def get_published_dashboard(slug: str) -> dict:
         store.record_view(dashboard["id"])
     except Exception as e:  # noqa: BLE001 — view counting is best effort
         logger.debug("View count failed for %s: %s", slug, e)
+    charts = store.list_charts(dashboard["id"])
+    sources = {s["chart_id"]: s for s in store.list_data_sources(dashboard["id"])}
+    for chart in charts:
+        source = sources.get(chart["id"])
+        if source:
+            chart["source"] = {
+                "status": source["last_status"],
+                "refresh_interval_s": source["refresh_interval_s"],
+                "last_refreshed_at": source["last_refreshed_at"],
+            }
     return {
         **_public_dashboard(dashboard),
         "likes": store.get_likes(dashboard["id"]),
-        "charts": store.list_charts(dashboard["id"]),
+        "charts": charts,
         "tweaks_enabled": get_settings().epidbot_configured,
     }
 

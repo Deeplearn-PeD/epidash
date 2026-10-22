@@ -27,6 +27,17 @@ CREATE TABLE IF NOT EXISTS charts (
 
 CREATE INDEX IF NOT EXISTS idx_charts_dashboard ON charts(dashboard_id);
 
+CREATE TABLE IF NOT EXISTS data_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chart_id INTEGER NOT NULL UNIQUE REFERENCES charts(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('url_json', 'url_csv')),
+    spec TEXT NOT NULL DEFAULT '{}',
+    refresh_interval_s INTEGER NOT NULL DEFAULT 300,
+    last_refreshed_at TEXT,
+    last_status TEXT NOT NULL DEFAULT 'pending' CHECK (last_status IN ('pending', 'ok', 'error')),
+    last_error TEXT
+);
+
 CREATE TABLE IF NOT EXISTS control_keys (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,

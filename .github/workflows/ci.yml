@@ -30,3 +30,22 @@ jobs:
         with:
           files: coverage.xml
           fail_ci_if_error: false
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies (with browser tooling)
+        run: uv sync --group e2e
+
+      - name: Install chromium
+        run: uv run playwright install chromium
+
+      - name: Run end-to-end tests
+        run: uv run pytest tests_e2e -m e2e -v

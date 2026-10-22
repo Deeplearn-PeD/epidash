@@ -24,7 +24,7 @@ from epidash.config import get_settings
 from epidash.logging import get_logger
 from epidash.mcpsrv import audit
 from epidash.mcpsrv.auth import get_current_key
-from epidash.store import Store, CHART_KINDS
+from epidash.store import Store, CHART_KINDS, validate_chart_data
 
 logger = get_logger(__name__)
 
@@ -155,39 +155,10 @@ def _audited(
 
 def _validate_chart_data(kind: str, data: dict) -> None:
     """Validate the per-kind data envelope; raise ToolError when malformed."""
-    if not isinstance(data, dict):
-        raise ToolError("data must be a JSON object")
-
-    if kind in ("line", "bar", "pie", "table"):
-        columns = data.get("columns")
-        rows = data.get("rows")
-        if not isinstance(columns, list) or not all(isinstance(c, str) for c in columns):
-            raise ToolError(
-                f"'{kind}' data needs 'columns': a list of column-name strings"
-            )
-        if not isinstance(rows, list) or not all(isinstance(r, list) for r in rows):
-            raise ToolError(f"'{kind}' data needs 'rows': a list of row arrays")
-        for i, row in enumerate(rows):
-            if len(row) != len(columns):
-                raise ToolError(
-                    f"row {i} has {len(row)} values but there are "
-                    f"{len(columns)} columns"
-                )
-    elif kind == "kpi":
-        if "value" not in data:
-            raise ToolError("'kpi' data needs a 'value' (number or string)")
-    elif kind == "choropleth":
-        values = data.get("values")
-        if not isinstance(values, dict) or not values:
-            raise ToolError(
-                "'choropleth' data needs 'values': a non-empty object mapping "
-                "UF code (e.g. 'SP', 'RJ') to a number"
-            )
-        for code, value in values.items():
-            if not isinstance(code, str) or len(code) != 2 or not isinstance(value, (int, float)):
-                raise ToolError(
-                    "'choropleth' values must map two-letter UF codes to numbers"
-                )
+    try:
+        validate_chart_data(kind, data)
+    except ValueError as e:
+        raise ToolError(str(e)) from e
 
 
 # ── read-only tools ──────────────────────────────────────────────────────
@@ -224,10 +195,17 @@ async def get_view_stats(dashboard_id: int) -> dict:
 
 
 @mcp.tool()
-async def get_audit_log(limit: int = 50) -> list:
+async def get_audit_log(
+    limit: int = 50,
+    action: Optional[str] = None,
+    dashboard_id: Optional[int] = None,
+) -> list:
     """Recent audit entries for mutations performed through this MCP
-    server (newest first)."""
-    return _get_store().list_audit(limit=min(max(limit, 1), 500))
+    server (newest first). Optional filters: by action name (e.g.
+    'publish_dashboard') and/or by target dashboard."""
+    return _get_store().list_audit(
+        limit=min(max(limit, 1), 500), action=action, dashboard_id=dashboard_id
+    )
 
 
 # ── mutating tools: dashboards ───────────────────────────────────────────
@@ -410,3 +388,115 @@ async def remove_chart(chart_id: int, confirm: bool = False) -> dict:
     if chart is None:
         raise ToolError(f"chart {chart_id} not found")
     return chart
+
+
+# ── mutating tools: data sources ─────────────────────────────────────────
+
+
+@mcp.tool()
+@_audited("attach_data_source", target_type="chart", target_id_arg="chart_id")
+async def attach_data_source(
+    chart_id: int,
+    kind: Literal["url_json", "url_csv"],
+    url: str,
+    refresh_interval_s: int = 300,
+    path: Optional[str] = None,
+) -> dict:
+    """Make a chart auto-update from a remote URL. kind: url_json (payload
+    is the chart's data envelope; optional dotted `path` extracts a nested
+    object) or url_csv (header row + rows; feeds line/bar/pie/table).
+    refresh_interval_s: minimum 30. The source is refreshed immediately on
+    attach; failures are recorded on the source (see get_data_source) and
+    never lose the chart's existing data."""
+    try:
+        source = _get_store().set_data_source(
+            chart_id, kind,
+            spec={"url": url, **({"path": path} if path else {})},
+            refresh_interval_s=refresh_interval_s,
+        )
+    except ValueError as e:
+        raise ToolError(str(e)) from e
+    from epidash import refresher
+
+    outcome = await refresher.refresh_source(_get_store(), chart_id)
+    return {**source, "last_refresh": outcome}
+
+
+@mcp.tool()
+@_audited("remove_data_source", target_type="chart", target_id_arg="chart_id")
+async def remove_data_source(chart_id: int, confirm: bool = False) -> dict:
+    """Detach a chart's data source: the chart keeps its current data but
+    stops auto-updating. Re-run with confirm=true to proceed."""
+    _require_confirm(
+        confirm, f"remove_data_source({chart_id})",
+        "stops this chart from auto-updating (data is kept)",
+    )
+    if _get_store().delete_data_source(chart_id):
+        return {"chart_id": chart_id, "removed": True}
+    raise ToolError(f"chart {chart_id} has no data source")
+
+
+@mcp.tool()
+async def get_data_source(chart_id: int) -> dict:
+    """Auto-refresh configuration and health of one chart's data source
+    (status of the last refresh, error, interval, timestamps)."""
+    source = _get_store().get_data_source(chart_id)
+    if source is None:
+        raise ToolError(f"chart {chart_id} has no data source")
+    return source
+
+
+@mcp.tool()
+@_audited("refresh_data_source", target_type="chart", target_id_arg="chart_id")
+async def refresh_data_source(chart_id: int) -> dict:
+    """Force an immediate refresh of a chart's data source and report the
+    outcome without waiting for the scheduled interval."""
+    from epidash import refresher
+
+    return await refresher.refresh_source(_get_store(), chart_id)
+
+
+# ── mutating tools: authoring power tools ────────────────────────────────
+
+
+@mcp.tool()
+@_audited("duplicate_dashboard", target_type="dashboard", target_id_arg="dashboard_id")
+async def duplicate_dashboard(
+    dashboard_id: int,
+    new_title: Optional[str] = None,
+    new_slug: Optional[str] = None,
+    author: Optional[str] = None,
+) -> dict:
+    """Copy a dashboard — as a new draft — including all charts (data,
+    spec, position) and their data sources. Useful to iterate on a variant
+    without touching the published original. new_title/new_slug/author
+    override the copies' title/slug/creator (defaults: '<title> (copy)',
+    random slug, original creator)."""
+    try:
+        copy = _get_store().duplicate_dashboard(
+            dashboard_id, new_title=new_title, new_slug=new_slug,
+            created_by=author,
+        )
+    except ValueError as e:
+        raise ToolError(str(e)) from e
+    if copy is None:
+        raise ToolError(f"dashboard {dashboard_id} not found")
+    settings = get_settings()
+    return {
+        **copy,
+        "url": f"{settings.base_url.rstrip('/')}/#/d/{copy['slug']}",
+    }
+
+
+@mcp.tool()
+@_audited("style_charts", target_type="dashboard", target_id_arg="dashboard_id")
+async def style_charts(dashboard_id: int, spec: dict) -> dict:
+    """Apply a style override to every chart of a dashboard at once, e.g.
+    {"color": "#4ade80"} or {"y_label": "casos"}. The fragment is merged
+    into each chart's existing spec (per-chart overrides win for keys set
+    afterwards via update_chart)."""
+    try:
+        count = _get_store().style_charts(dashboard_id, spec)
+    except ValueError as e:
+        raise ToolError(str(e)) from e
+    return {"dashboard_id": dashboard_id, "charts_styled": count, "spec": spec}

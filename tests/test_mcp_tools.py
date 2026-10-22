@@ -298,3 +298,111 @@ class TestProtocolRoundTrip:
                  "data": {"columns": ["a"], "rows": [[1]]}},
             )
             assert result.isError
+
+
+class TestDataSourceTools:
+    """attach/get/refresh/remove data sources via MCP tools."""
+
+    async def _chart(self, store):
+        d = await mcp_server.create_dashboard("D", slug="ds-dash")
+        return await mcp_server.add_chart(
+            d["id"], "line", title="t",
+            data={"columns": ["m", "v"], "rows": [["Jan", 1]]},
+        )
+
+    async def test_attach_refreshes_immediately(self, env, monkeypatch):
+        store, _ = env
+        async with keyed_context(store):
+            chart = await self._chart(store)
+
+            async def fake_refresh(s, chart_id, client=None):
+                s.update_chart_data(chart_id, {"columns": ["m", "v"], "rows": [["Fev", 9]]})
+                s.record_data_source_refresh(chart_id, "ok")
+                return {"status": "ok"}
+
+            monkeypatch.setattr("epidash.refresher.refresh_source", fake_refresh)
+            src = await mcp_server.attach_data_source(
+                chart["id"], "url_json", "https://x.test/data", 60
+            )
+            assert src["kind"] == "url_json" and src["last_refresh"]["status"] == "ok"
+            got = await mcp_server.get_data_source(chart["id"])
+            assert got["refresh_interval_s"] == 60
+
+    async def test_attach_validation(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            chart = await self._chart(store)
+            with pytest.raises(ToolError, match="at least 30"):
+                await mcp_server.attach_data_source(chart["id"], "url_json", "u", 5)
+
+    async def test_get_missing_source(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            with pytest.raises(ToolError, match="no data source"):
+                await mcp_server.get_data_source(999)
+
+    async def test_remove_requires_confirm(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            chart = await self._chart(store)
+            store.set_data_source(chart["id"], "url_json", {"url": "u"})
+            with pytest.raises(ToolError, match="NOT executed"):
+                await mcp_server.remove_data_source(chart["id"])
+            out = await mcp_server.remove_data_source(chart["id"], confirm=True)
+            assert out["removed"] is True
+            assert store.get_data_source(chart["id"]) is None
+
+    async def test_duplicate_dashboard_tool(self, env):
+        store, settings = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("Dengue", slug="orig")
+            await mcp_server.add_chart(
+                d["id"], "kpi", title="total", data={"value": 3}
+            )
+            copy = await mcp_server.duplicate_dashboard(
+                d["id"], new_title="Copy", author="fccoelho"
+            )
+            assert copy["status"] == "draft"
+            assert copy["title"] == "Copy"
+            assert copy["created_by"] == "fccoelho"
+            assert copy["url"].endswith(f"/#/d/{copy['slug']}")
+            got = await mcp_server.get_dashboard(copy["id"])
+            assert len(got["charts"]) == 1
+
+    async def test_duplicate_missing(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            with pytest.raises(ToolError, match="not found"):
+                await mcp_server.duplicate_dashboard(999)
+
+    async def test_style_charts_tool(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("D")
+            envelope = {"columns": ["m", "v"], "rows": [["Jan", 1]]}
+            c1 = await mcp_server.add_chart(d["id"], "line", title="a", data=envelope)
+            c2 = await mcp_server.add_chart(d["id"], "bar", title="b", data=envelope)
+            out = await mcp_server.style_charts(d["id"], {"color": "#4ade80"})
+            assert out["charts_styled"] == 2
+            charts = (await mcp_server.get_dashboard(d["id"]))["charts"]
+            assert charts[0]["spec"]["color"] == "#4ade80"
+            assert charts[1]["spec"]["color"] == "#4ade80"
+
+    async def test_style_charts_rejects_empty(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("D")
+            with pytest.raises(ToolError, match="non-empty"):
+                await mcp_server.style_charts(d["id"], {})
+
+    async def test_audit_log_filters(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("D", slug="af")
+            await mcp_server.publish_dashboard(d["id"], confirm=True)
+            everything = await mcp_server.get_audit_log()
+            assert len(everything) >= 2
+            only_create = await mcp_server.get_audit_log(action="create_dashboard")
+            assert {r["action"] for r in only_create} == {"create_dashboard"}
+            only_this = await mcp_server.get_audit_log(dashboard_id=d["id"])
+            assert all(r["target_id"] == str(d["id"]) for r in only_this)

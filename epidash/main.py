@@ -22,6 +22,7 @@ from epidash.logging import get_logger
 from epidash.mcpsrv import audit as mcp_audit
 from epidash.mcpsrv import server as mcp_server
 from epidash.mcpsrv.auth import McpAuthMiddleware, set_store as auth_set_store
+from epidash import refresher
 from epidash.store import Store
 
 logger = get_logger(__name__)
@@ -100,7 +101,11 @@ def create_app(store: Store | None = None, *, run_mcp_lifespan: bool = True) -> 
         session_manager = mcp_server.mcp.session_manager
         if run_mcp_lifespan:
             async with session_manager.run():
-                yield
+                refresher.start(store)
+                try:
+                    yield
+                finally:
+                    await refresher.stop()
         else:
             yield
         logger.info(

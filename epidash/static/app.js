@@ -171,7 +171,10 @@ async function showDashboard(slug) {
   for (const chart of charts) {
     const card = document.createElement("div");
     card.className = "chart-card" + (chart.position.width === "half" ? "" : " full");
-    card.innerHTML = `<h2>${esc(chart.title || chart.kind)}</h2><div class="plot"></div>`;
+    const srcBadge = chart.source
+      ? `<span class="src-badge src-${esc(chart.source.status)}" title="Auto-updates every ${esc(String(chart.source.refresh_interval_s))}s · last refresh: ${esc(String(chart.source.last_refreshed_at || "never"))} (${esc(chart.source.status)})">⇣ auto</span>`
+      : "";
+    card.innerHTML = `<h2>${esc(chart.title || chart.kind)}${srcBadge}</h2><div class="plot"></div>`;
     grid.appendChild(card);
     try {
       renderChart(card.querySelector(".plot"), chart);

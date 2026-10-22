@@ -79,11 +79,31 @@ In an MCP client (e.g. Claude Desktop, Cursor, EpidBot):
 
 ## MCP tools
 
-Read-only: `list_dashboards`, `get_dashboard`, `get_view_stats`, `get_audit_log`.
+Read-only: `list_dashboards`, `get_dashboard`, `get_view_stats`, `get_audit_log`
+(filterable by `action` and `dashboard_id`).
 
 Mutations (audited): `create_dashboard`, `update_dashboard`,
 `publish_dashboard` (confirm), `unpublish_dashboard` (confirm),
-`add_chart`, `update_chart`, `remove_chart` (confirm).
+`delete_dashboard` (confirm), `add_chart`, `update_chart`, `remove_chart`
+(confirm), `duplicate_dashboard`, `style_charts`.
+
+### Live data sources
+
+Charts can auto-update from a remote URL instead of holding a static
+snapshot. `attach_data_source(chart_id, kind, url, refresh_interval_s=300,
+path=None)` attaches a source:
+
+| kind | payload |
+|---|---|
+| `url_json` | the chart's data envelope itself (`{"columns": ..., "rows": ...}`); `path` optionally extracts a nested object (dotted keys, e.g. `"result.week"`) |
+| `url_csv` | header row + data rows (numeric cells auto-converted); feeds `line`/`bar`/`pie`/`table` charts |
+
+A background refresher fetches due sources every 30s (minimum interval 30s)
+and replaces the chart's data on success — viewers pick the change up on
+their next poll, and chart cards show an `⇣ auto` badge with refresh
+status. Failures never lose existing data; inspect them with
+`get_data_source(chart_id)`, force a run with `refresh_data_source`, or
+stop with `remove_data_source` (confirm).
 
 ### Chart data envelopes
 
@@ -131,6 +151,14 @@ nginx at `dash.kwar-ai.com.br` — see the
 uv sync                  # deps
 uv run pytest -v         # tests
 uv run ty check epidash/ # type check
+```
+
+Browser end-to-end tests (headless chromium):
+
+```bash
+uv sync --group e2e
+uv run playwright install chromium
+uv run pytest tests_e2e -m e2e -v
 ```
 
 ## License

@@ -218,6 +218,145 @@ class TestTweakKinds:
         assert store.get_tweak(t["id"])["kind"] == "question"
 
 
+class TestDataSources:
+    """Per-chart auto-refresh sources: upsert, status, due query."""
+
+    def _chart(self, store):
+        d = store.create_dashboard("D")
+        return store.add_chart(d["id"], "line", title="t")
+
+    def test_attach_and_get(self, store):
+        c = self._chart(store)
+        s = store.set_data_source(
+            c["id"], "url_json", {"url": "https://x.test/d.json"}, 120
+        )
+        assert s["chart_id"] == c["id"]
+        assert s["kind"] == "url_json"
+        assert s["refresh_interval_s"] == 120
+        assert s["last_status"] == "pending"
+        assert store.get_data_source(c["id"])["id"] == s["id"]
+
+    def test_upsert_resets_status(self, store):
+        c = self._chart(store)
+        store.set_data_source(c["id"], "url_json", {"url": "https://x.test/a"})
+        store.record_data_source_refresh(c["id"], "ok")
+        assert store.get_data_source(c["id"])["last_status"] == "ok"
+        store.set_data_source(c["id"], "url_csv", {"url": "https://x.test/b"})
+        s = store.get_data_source(c["id"])
+        assert s["kind"] == "url_csv"
+        assert s["last_status"] == "pending" and s["last_refreshed_at"] is None
+
+    def test_validation(self, store):
+        c = self._chart(store)
+        with pytest.raises(ValueError, match="invalid data source kind"):
+            store.set_data_source(c["id"], "rss", {"url": "u"})
+        with pytest.raises(ValueError, match="url"):
+            store.set_data_source(c["id"], "url_json", {})
+        with pytest.raises(ValueError, match="at least 30"):
+            store.set_data_source(c["id"], "url_json", {"url": "u"}, 10)
+        with pytest.raises(ValueError, match="does not exist"):
+            store.set_data_source(999, "url_json", {"url": "u"})
+
+    def test_due_sources_and_refresh_bookkeeping(self, store):
+        c = self._chart(store)
+        store.set_data_source(c["id"], "url_json", {"url": "u"}, 60)
+        assert [s["chart_id"] for s in store.due_data_sources()] == [c["id"]]
+        store.record_data_source_refresh(c["id"], "ok")
+        assert store.due_data_sources() == []
+        assert store.get_data_source(c["id"])["last_status"] == "ok"
+        assert store.get_data_source(c["id"])["last_refreshed_at"]
+
+    def test_error_status_keeps_error_text(self, store):
+        c = self._chart(store)
+        store.set_data_source(c["id"], "url_json", {"url": "u"})
+        store.record_data_source_refresh(c["id"], "error", error="HTTP 500")
+        s = store.get_data_source(c["id"])
+        assert s["last_status"] == "error" and s["last_error"] == "HTTP 500"
+
+    def test_delete_and_cascade(self, store):
+        c = self._chart(store)
+        store.set_data_source(c["id"], "url_json", {"url": "u"})
+        assert store.delete_data_source(c["id"])
+        assert store.get_data_source(c["id"]) is None
+        assert not store.delete_data_source(c["id"])
+        # removing the chart cascades the source away
+        store.set_data_source(c["id"], "url_json", {"url": "u"})
+        store.remove_chart(c["id"])
+        assert store.get_data_source(c["id"]) is None
+
+    def test_update_chart_data_bumps_dashboard(self, store):
+        d = store.create_dashboard("D")
+        c = store.add_chart(d["id"], "line", title="t")
+        before = store.get_dashboard(d["id"])["updated_at"]
+        out = store.update_chart_data(c["id"], {"columns": ["x"], "rows": [[1]]})
+        assert out["data"]["rows"] == [[1]]
+        assert store.get_dashboard(d["id"])["updated_at"] >= before
+
+
+class TestDuplicateDashboard:
+    def test_copies_charts_and_sources(self, store):
+        d = store.create_dashboard("Dengue", created_by="EpidBot")
+        c1 = store.add_chart(d["id"], "line", title="cases", spec={"color": "#fff"},
+                             data={"columns": ["m", "v"], "rows": [["Jan", 1]]})
+        store.add_chart(d["id"], "kpi", title="total", data={"value": 5})
+        store.set_data_source(c1["id"], "url_json", {"url": "https://x.test/d"}, 90)
+        store.set_dashboard_status(d["id"], "published")
+
+        copy = store.duplicate_dashboard(d["id"])
+        assert copy["status"] == "draft"
+        assert copy["title"] == "Dengue (copy)"
+        assert copy["slug"] != d["slug"]
+        charts = store.list_charts(copy["id"])
+        assert [c["kind"] for c in charts] == ["line", "kpi"]
+        assert charts[0]["spec"] == {"color": "#fff"}
+        src = store.get_data_source(charts[0]["id"])
+        assert src["spec"]["url"] == "https://x.test/d" and src["refresh_interval_s"] == 90
+
+    def test_overrides(self, store):
+        d = store.create_dashboard("D", created_by="EpidBot")
+        copy = store.duplicate_dashboard(
+            d["id"], new_title="Variant", new_slug="variant", created_by="fccoelho"
+        )
+        assert copy["title"] == "Variant"
+        assert copy["slug"] == "variant"
+        assert copy["created_by"] == "fccoelho"
+
+    def test_missing_returns_none(self, store):
+        assert store.duplicate_dashboard(999) is None
+
+
+class TestStyleCharts:
+    def test_merges_fragment_into_all_charts(self, store):
+        d = store.create_dashboard("D")
+        c1 = store.add_chart(d["id"], "line", title="a", spec={"y_label": "casos"})
+        c2 = store.add_chart(d["id"], "bar", title="b")
+        n = store.style_charts(d["id"], {"color": "#4ade80"})
+        assert n == 2
+        assert store.get_chart(c1["id"])["spec"] == {"y_label": "casos", "color": "#4ade80"}
+        assert store.get_chart(c2["id"])["spec"] == {"color": "#4ade80"}
+
+    def test_empty_spec_rejected(self, store):
+        d = store.create_dashboard("D")
+        with pytest.raises(ValueError):
+            store.style_charts(d["id"], {})
+
+
+class TestAuditFilters:
+    def test_filter_by_action_and_dashboard(self, store):
+        d1 = store.create_dashboard("A", slug="a")
+        d2 = store.create_dashboard("B", slug="b")
+        store.log_audit(1, "create_dashboard", target_type="dashboard", target_id=d1["id"])
+        store.log_audit(1, "publish_dashboard", target_type="dashboard", target_id=d1["id"])
+        store.log_audit(1, "create_dashboard", target_type="dashboard", target_id=d2["id"])
+
+        rows = store.list_audit(action="create_dashboard")
+        assert len(rows) == 2
+        rows = store.list_audit(dashboard_id=d1["id"])
+        assert {r["action"] for r in rows} == {"create_dashboard", "publish_dashboard"}
+        rows = store.list_audit(action="publish_dashboard", dashboard_id=d2["id"])
+        assert rows == []
+
+
 class TestCreatorAttribution:
     """created_by is stored at creation and survives re-reads."""
 

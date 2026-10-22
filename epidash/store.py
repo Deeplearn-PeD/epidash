@@ -20,6 +20,45 @@ _SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
 
 CHART_KINDS = ("line", "bar", "pie", "kpi", "table", "choropleth")
 
+DATA_SOURCE_KINDS = ("url_json", "url_csv")
+
+
+def validate_chart_data(kind: str, data: dict) -> None:
+    """Validate the per-kind data envelope; raise ValueError when malformed."""
+    if not isinstance(data, dict):
+        raise ValueError("data must be a JSON object")
+
+    if kind in ("line", "bar", "pie", "table"):
+        columns = data.get("columns")
+        rows = data.get("rows")
+        if not isinstance(columns, list) or not all(isinstance(c, str) for c in columns):
+            raise ValueError(
+                f"'{kind}' data needs 'columns': a list of column-name strings"
+            )
+        if not isinstance(rows, list) or not all(isinstance(r, list) for r in rows):
+            raise ValueError(f"'{kind}' data needs 'rows': a list of row arrays")
+        for i, row in enumerate(rows):
+            if len(row) != len(columns):
+                raise ValueError(
+                    f"row {i} has {len(row)} values but there are "
+                    f"{len(columns)} columns"
+                )
+    elif kind == "kpi":
+        if "value" not in data:
+            raise ValueError("'kpi' data needs a 'value' (number or string)")
+    elif kind == "choropleth":
+        values = data.get("values")
+        if not isinstance(values, dict) or not values:
+            raise ValueError(
+                "'choropleth' data needs 'values': a non-empty object mapping "
+                "UF code (e.g. 'SP', 'RJ') to a number"
+            )
+        for code, value in values.items():
+            if not isinstance(code, str) or len(code) != 2 or not isinstance(value, (int, float)):
+                raise ValueError(
+                    "'choropleth' values must map two-letter UF codes to numbers"
+                )
+
 
 def hash_key(raw_key: str) -> str:
     """SHA-256 of the raw control key (the plaintext is never stored)."""
@@ -187,6 +226,56 @@ class Store:
             ).fetchone()
         return self.dashboard_out(_row_to_dict(row))
 
+    def duplicate_dashboard(
+        self,
+        dashboard_id: int,
+        new_title: str | None = None,
+        new_slug: str | None = None,
+        created_by: str | None = None,
+    ) -> dict | None:
+        """Copy a dashboard (draft) with its charts and data sources."""
+        src = self.get_dashboard(dashboard_id)
+        if src is None:
+            return None
+        copy = self.create_dashboard(
+            title=new_title or f"{src['title']} (copy)",
+            description=src["description"],
+            slug=new_slug,
+            layout=src["layout"],
+            created_by=created_by if created_by is not None else src["created_by"],
+        )
+        chart_id_map: dict[int, int] = {}
+        for chart in self.list_charts(dashboard_id):
+            new_chart = self.add_chart(
+                copy["id"], chart["kind"], title=chart["title"],
+                data=chart["data"], spec=chart["spec"], position=chart["position"],
+            )
+            chart_id_map[chart["id"]] = new_chart["id"]
+        for source in self.list_data_sources(dashboard_id):
+            self.set_data_source(
+                chart_id_map[source["chart_id"]], source["kind"],
+                source["spec"], source["refresh_interval_s"],
+            )
+        return self.get_dashboard(copy["id"])
+
+    def style_charts(self, dashboard_id: int, spec: dict) -> int:
+        """Merge a spec fragment into every chart of a dashboard; returns
+        the number of charts styled."""
+        if not isinstance(spec, dict) or not spec:
+            raise ValueError("spec must be a non-empty JSON object")
+        count = 0
+        for chart in self.list_charts(dashboard_id):
+            merged = {**chart["spec"], **spec}
+            self.update_chart(chart["id"], spec=merged)
+            count += 1
+        with self.conn() as con:
+            con.execute(
+                "UPDATE dashboards SET updated_at ="
+                " strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+                (dashboard_id,),
+            )
+        return count
+
     def delete_dashboard(self, dashboard_id: int) -> dict | None:
         """Permanently remove a dashboard and all of its charts.
 
@@ -293,6 +382,111 @@ class Store:
                 (chart["dashboard_id"],),
             )
         return chart
+
+    def update_chart_data(self, chart_id: int, data: dict) -> dict | None:
+        """Replace a chart's data envelope (used by the refresher); bumps the
+        chart's and dashboard's updated_at so viewers pick up the change."""
+        with self.conn() as con:
+            cur = con.execute(
+                "UPDATE charts SET data = ?, updated_at ="
+                " strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+                (json.dumps(data), chart_id),
+            )
+            if cur.rowcount == 0:
+                return None
+            con.execute(
+                "UPDATE dashboards SET updated_at ="
+                " strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ("
+                "  SELECT dashboard_id FROM charts WHERE id = ?)",
+                (chart_id,),
+            )
+            row = con.execute("SELECT * FROM charts WHERE id = ?", (chart_id,)).fetchone()
+        return self.chart_out(_row_to_dict(row))
+
+    # ───────────────────────── data sources ────────────────────────
+
+    def set_data_source(
+        self,
+        chart_id: int,
+        kind: str,
+        spec: dict,
+        refresh_interval_s: int = 300,
+    ) -> dict:
+        """Attach (or replace) the auto-refresh source of a chart."""
+        if kind not in DATA_SOURCE_KINDS:
+            raise ValueError(f"invalid data source kind '{kind}'")
+        if refresh_interval_s < 30:
+            raise ValueError("refresh_interval_s must be at least 30")
+        if not isinstance(spec, dict) or not spec.get("url"):
+            raise ValueError("data source spec needs a 'url'")
+        with self.conn() as con:
+            exists = con.execute(
+                "SELECT 1 FROM charts WHERE id = ?", (chart_id,)
+            ).fetchone()
+            if not exists:
+                raise ValueError(f"chart {chart_id} does not exist")
+            con.execute(
+                "INSERT INTO data_sources (chart_id, kind, spec, refresh_interval_s)"
+                " VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(chart_id) DO UPDATE SET kind = excluded.kind,"
+                " spec = excluded.spec, refresh_interval_s = excluded.refresh_interval_s,"
+                " last_refreshed_at = NULL, last_status = 'pending', last_error = NULL",
+                (chart_id, kind, json.dumps(spec), refresh_interval_s),
+            )
+            row = con.execute(
+                "SELECT * FROM data_sources WHERE chart_id = ?", (chart_id,)
+            ).fetchone()
+        return self.data_source_out(_row_to_dict(row))
+
+    def get_data_source(self, chart_id: int) -> dict | None:
+        with self.conn() as con:
+            row = con.execute(
+                "SELECT * FROM data_sources WHERE chart_id = ?", (chart_id,)
+            ).fetchone()
+        return self.data_source_out(_row_to_dict(row)) if row else None
+
+    def list_data_sources(self, dashboard_id: int) -> list[dict]:
+        """Sources of every chart in a dashboard, keyed by chart_id."""
+        with self.conn() as con:
+            rows = con.execute(
+                "SELECT ds.* FROM data_sources ds JOIN charts c ON c.id = ds.chart_id"
+                " WHERE c.dashboard_id = ?",
+                (dashboard_id,),
+            ).fetchall()
+        return [self.data_source_out(_row_to_dict(r)) for r in rows]
+
+    def due_data_sources(self) -> list[dict]:
+        """Sources whose refresh interval has elapsed (or never ran)."""
+        with self.conn() as con:
+            rows = con.execute(
+                "SELECT * FROM data_sources WHERE last_refreshed_at IS NULL OR"
+                " strftime('%s', 'now') - strftime('%s', last_refreshed_at)"
+                " >= refresh_interval_s"
+            ).fetchall()
+        return [self.data_source_out(_row_to_dict(r)) for r in rows]
+
+    def delete_data_source(self, chart_id: int) -> bool:
+        with self.conn() as con:
+            cur = con.execute(
+                "DELETE FROM data_sources WHERE chart_id = ?", (chart_id,)
+            )
+        return cur.rowcount > 0
+
+    def record_data_source_refresh(
+        self, chart_id: int, status: str, error: str | None = None
+    ) -> None:
+        with self.conn() as con:
+            con.execute(
+                "UPDATE data_sources SET last_refreshed_at ="
+                " strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), last_status = ?,"
+                " last_error = ? WHERE chart_id = ?",
+                (status, error, chart_id),
+            )
+
+    @staticmethod
+    def data_source_out(row: dict) -> dict:
+        row["spec"] = _loads(row.get("spec"))
+        return row
 
     # ───────────────────────── view counts ─────────────────────────
 
@@ -435,11 +629,26 @@ class Store:
         except Exception as e:  # noqa: BLE001 — audit must never break tools
             logger.error("Audit write failed for %s: %s", action, e)
 
-    def list_audit(self, limit: int = 100) -> list[dict]:
+    def list_audit(
+        self,
+        limit: int = 100,
+        action: str | None = None,
+        dashboard_id: int | None = None,
+    ) -> list[dict]:
+        query = "SELECT * FROM audit_log"
+        conditions, args = [], []
+        if action:
+            conditions.append("action = ?")
+            args.append(action)
+        if dashboard_id is not None:
+            conditions.append("target_type = 'dashboard' AND target_id = ?")
+            args.append(str(dashboard_id))
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
         with self.conn() as con:
-            rows = con.execute(
-                "SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall()
+            rows = con.execute(query, args).fetchall()
         out = []
         for r in rows:
             d = _row_to_dict(r)
