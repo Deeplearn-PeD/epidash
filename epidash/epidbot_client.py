@@ -1,13 +1,15 @@
-"""Client for EpidBot's chat API — powers the viewer "tweak" flow.
+"""Client for EpidBot's chat API — powers the viewer "tweak"/"ask" flows.
 
 Authentication uses the internal-service pattern already established by
 EpidBot's file-upload endpoint: the shared ``INTERNAL_API_SECRET`` sent as
 an ``X-Internal-Request`` header. An ``ek_`` API key sent as a Bearer
 token is supported as a fallback for local experiments.
 
-Flow: submit the tweak as a chat job (POST /api/v1/chat), then poll
-GET /api/v1/chat/{job_id} until the agent finishes. The agent is expected
-to mutate the dashboard through its EpiDash MCP tools during that turn.
+Flow: submit the turn to the service chat route (POST /api/v1/chat/service
+— the plain /chat route requires user credentials), then poll
+GET /api/v1/chat/service/{job_id} until the agent finishes. The agent is
+expected to mutate the dashboard through its EpiDash MCP tools during a
+tweak turn; question turns are answered without touching the dashboard.
 """
 
 import asyncio
@@ -102,7 +104,7 @@ class EpidBotClient:
 
     async def _submit(self, client: httpx.AsyncClient, message: str) -> tuple[str, Optional[int]]:
         response = await client.post(
-            f"{self.base_url}/api/v1/chat",
+            f"{self.base_url}/api/v1/chat/service",
             json={"message": message, "locale": "en"},
             headers=self._headers(),
             timeout=30,
@@ -121,7 +123,7 @@ class EpidBotClient:
         deadline = asyncio.get_event_loop().time() + self.timeout_s
         while True:
             response = await client.get(
-                f"{self.base_url}/api/v1/chat/{job_id}",
+                f"{self.base_url}/api/v1/chat/service/{job_id}",
                 headers=self._headers(),
                 timeout=15,
             )
