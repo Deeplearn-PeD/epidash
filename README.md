@@ -1,7 +1,7 @@
 # EpiDash
 
 [![CI](https://github.com/Deeplearn-PeD/epidash/actions/workflows/ci.yml/badge.svg)](https://github.com/Deeplearn-PeD/epidash/actions/workflows/ci.yml)
-[![Codecov](https://codecov.io/gh/Deeplearn-PeD/epidash/graph/badge.svg)](https://codecov.io/gh/Deeplearn-PeD/epidash)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/Deeplearn-PeD/epidash/badge/coverage.json)](https://github.com/Deeplearn-PeD/epidash/tree/badge)
 [![PyPI](https://img.shields.io/pypi/v/epidash)](https://pypi.org/project/epidash/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)

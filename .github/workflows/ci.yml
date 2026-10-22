@@ -9,7 +9,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write # Codecov OIDC tokenless upload
+      contents: write # push the coverage badge to the `badge` branch
     steps:
       - uses: actions/checkout@v4
 
@@ -25,14 +25,34 @@ jobs:
         run: uv run ty check epidash/
 
       - name: Run tests
-        run: uv run pytest -v --cov=epidash --cov-report=xml
+        run: uv run pytest -v --cov=epidash --cov-report=
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+      - name: Check out badge branch
+        uses: actions/checkout@v4
         with:
-          files: coverage.xml
-          use_oidc: true
-          fail_ci_if_error: false
+          ref: badge
+          path: badge-branch
+
+      - name: Update coverage badge
+        run: |
+          PCT=$(uv run coverage report --format=total)
+          PCT_INT=${PCT%%.*}
+          if [ "$PCT_INT" -ge 90 ]; then COLOR=brightgreen;
+          elif [ "$PCT_INT" -ge 75 ]; then COLOR=green;
+          elif [ "$PCT_INT" -ge 60 ]; then COLOR=yellow;
+          else COLOR=red; fi
+          printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' \
+            "$PCT" "$COLOR" > badge-branch/coverage.json
+          cd badge-branch
+          git config user.name "epidash-ci"
+          git config user.email "ci@epidash.invalid"
+          if git diff --quiet coverage.json; then
+            echo "Badge unchanged (${PCT}%)"
+          else
+            git add coverage.json
+            git commit -m "coverage badge: ${PCT}%"
+            git push
+          fi
 
   e2e:
     runs-on: ubuntu-latest
