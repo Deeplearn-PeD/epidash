@@ -90,10 +90,56 @@ class Settings:
     #: How long to wait for EpidBot to finish a tweak (seconds).
     tweak_timeout_s: int = field(default_factory=lambda: _env_int("EPIDASH_TWEAK_TIMEOUT_S", 300))
 
+    #: OIDC issuer (e.g. https://auth.kwar-ai.com.br/realms/master). Empty
+    #: disables viewer identity entirely (anonymous viewing only).
+    oidc_issuer: str = field(default_factory=lambda: _env_str("EPIDASH_OIDC_ISSUER"))
+
+    #: OIDC client registered for EpiDash (confidential client).
+    oidc_client_id: str = field(default_factory=lambda: _env_str("EPIDASH_OIDC_CLIENT_ID"))
+
+    #: OIDC client secret.
+    oidc_client_secret: str = field(default_factory=lambda: _env_str("EPIDASH_OIDC_CLIENT_SECRET"))
+
+    #: Redirect URI for the OIDC code flow (default: {base_url}/auth/callback).
+    oidc_redirect_uri: str = field(default_factory=lambda: _env_str("EPIDASH_OIDC_REDIRECT_URI"))
+
+    #: Secret used to sign viewer session cookies. Required when OIDC is
+    #: enabled; any long random string.
+    session_secret: str = field(default_factory=lambda: _env_str("EPIDASH_SESSION_SECRET"))
+
+    @property
+    def oidc_configured(self) -> bool:
+        """True when viewer identity (Keycloak login) can be used."""
+        return bool(
+            self.oidc_issuer
+            and self.oidc_client_id
+            and self.oidc_client_secret
+            and self.session_secret
+        )
+
+    @property
+    def oidc_redirect(self) -> str:
+        return self.oidc_redirect_uri or f"{self.base_url.rstrip('/')}/auth/callback"
+
     @property
     def epidbot_configured(self) -> bool:
         """True when the tweak flow can reach EpidBot."""
         return bool(self.epidbot_base_url) and bool(self.epidbot_internal_secret)
+
+    @property
+    def pg_sources(self) -> dict[str, str]:
+        """Named Postgres DSNs for data sources, from the environment.
+
+        Any ``EPIDASH_PG_DSN_<NAME>=postgres://...`` variable registers a
+        source under ``<name>`` (lowercased). DSNs live only in the
+        environment; the database stores the logical name.
+        """
+        prefix = "EPIDASH_PG_DSN_"
+        return {
+            key[len(prefix):].lower(): value.strip()
+            for key, value in os.environ.items()
+            if key.startswith(prefix) and value.strip()
+        }
 
 
 _settings: Settings | None = None

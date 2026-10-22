@@ -369,6 +369,80 @@ class TestCreatorAttribution:
         assert store.create_dashboard("D")["created_by"] == ""
 
 
+class TestMarkdownCharts:
+    """The markdown narrative kind."""
+
+    def test_add_and_get(self, store):
+        d = store.create_dashboard("D")
+        c = store.add_chart(d["id"], "markdown", data={"text": "## Notas\ncasos **sobem**"})
+        assert c["kind"] == "markdown"
+        assert "sobem" in store.get_chart(c["id"])["data"]["text"]
+
+    def test_text_required(self, store):
+        d = store.create_dashboard("D")
+        with pytest.raises(ValueError, match="'text'"):
+            store.add_chart(d["id"], "markdown", data={})
+        with pytest.raises(ValueError, match="'text'"):
+            store.add_chart(d["id"], "markdown", data={"text": "   "})
+
+    def test_text_length_cap(self, store):
+        d = store.create_dashboard("D")
+        with pytest.raises(ValueError, match="too long"):
+            store.add_chart(
+                d["id"], "markdown", data={"text": "x" * 10_001}
+            )
+
+    def test_update_chart_to_markdown(self, store):
+        d = store.create_dashboard("D")
+        c = store.add_chart(
+            d["id"], "line", title="t",
+            data={"columns": ["m", "v"], "rows": [["Jan", 1]]},
+        )
+        out = store.update_chart(c["id"], kind="markdown", data={"text": "now narrative"})
+        assert out["kind"] == "markdown"
+
+    def test_legacy_kind_check_relaxed(self, tmp_path):
+        import sqlite3
+
+        path = str(tmp_path / "legacy-charts.db")
+        con = sqlite3.connect(path)
+        con.execute(
+            "CREATE TABLE dashboards ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " slug TEXT NOT NULL UNIQUE,"
+            " title TEXT NOT NULL,"
+            " description TEXT NOT NULL DEFAULT '',"
+            " layout TEXT NOT NULL DEFAULT '{}',"
+            " status TEXT NOT NULL DEFAULT 'draft',"
+            " created_at TEXT NOT NULL DEFAULT '',"
+            " updated_at TEXT NOT NULL DEFAULT '',"
+            " published_at TEXT)"
+        )
+        con.execute(
+            "CREATE TABLE charts ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " dashboard_id INTEGER NOT NULL,"
+            " kind TEXT NOT NULL CHECK (kind IN ('line', 'bar', 'pie', 'kpi', 'table', 'choropleth')),"
+            " title TEXT NOT NULL DEFAULT '',"
+            " data TEXT NOT NULL DEFAULT '{}',"
+            " spec TEXT NOT NULL DEFAULT '{}',"
+            " position TEXT NOT NULL DEFAULT '{}',"
+            " created_at TEXT NOT NULL DEFAULT '',"
+            " updated_at TEXT NOT NULL DEFAULT '')"
+        )
+        con.execute("INSERT INTO dashboards (slug, title) VALUES ('old', 'Old')")
+        con.execute(
+            "INSERT INTO charts (dashboard_id, kind, title) VALUES (1, 'line', 'keep me')"
+        )
+        con.commit()
+        con.close()
+
+        s = Store(path)
+        assert s.get_chart(1)["title"] == "keep me"
+        md = s.add_chart(1, "markdown", data={"text": "post-migration"})
+        assert md["kind"] == "markdown"
+
+
 class TestMigrations:
     """Pre-created_by databases are migrated in place on startup."""
 

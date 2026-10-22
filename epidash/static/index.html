@@ -11,27 +11,30 @@
   <header class="topbar">
     <a class="brand" href="/#/"><img class="brand-logo" src="/kwar-ai-logo.webp" alt="Kwar-AI">Epi<span>Dash</span></a>
     <span id="dash-status" class="status-badge" hidden></span>
+    <span id="auth-chip" class="auth-chip" data-i18n-title="sign_in"><a id="auth-link" href="/auth/login">Sign in</a></span>
   </header>
 
   <main id="app"></main>
 
   <!-- Viewer tweak panel -->
   <div id="tweak-panel" hidden>
-    <button id="tweak-toggle" title="Ask EpidBot to change this dashboard" aria-label="Ask EpidBot to change this dashboard"><img class="tweak-logo" src="/epidbot.webp" alt=""></button>
+    <button id="tweak-toggle" data-i18n-title="change_title" aria-label="Ask EpidBot to change this dashboard"><img class="tweak-logo" src="/epidbot.webp" alt=""></button>
     <div id="tweak-body" hidden>
       <div id="tweak-log"></div>
       <div class="tweak-input-row">
-        <textarea id="tweak-input" rows="2"
+        <textarea id="tweak-input" rows="2" data-i18n-placeholder="input_placeholder"
           placeholder="Ask a question or request a change…"></textarea>
         <div class="tweak-send-col">
-          <button id="ask-send" title="Ask EpidBot a question about this dashboard">Ask</button>
-          <button id="tweak-send" title="Ask EpidBot to change this dashboard">Change</button>
+          <button id="ask-send" data-i18n-title="ask_title" data-i18n="ask_btn">Ask</button>
+          <button id="tweak-send" data-i18n-title="change_title" data-i18n="change_btn">Change</button>
         </div>
       </div>
     </div>
   </div>
 
-  <script src="/vendor/plotly.min.js"></script>
+  <script src="/vendor/marked.min.js"></script>
+  <script src="/vendor/purify.min.js"></script>
+  <script src="/i18n.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

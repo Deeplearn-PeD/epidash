@@ -16,13 +16,14 @@ from starlette.datastructures import MutableHeaders
 from starlette.routing import Mount as StarletteMount, Route as StarletteRoute
 from starlette.staticfiles import StaticFiles
 
+from epidash import refresher
 from epidash.api import routes_public
 from epidash.config import get_settings
 from epidash.logging import get_logger
 from epidash.mcpsrv import audit as mcp_audit
 from epidash.mcpsrv import server as mcp_server
 from epidash.mcpsrv.auth import McpAuthMiddleware, set_store as auth_set_store
-from epidash import refresher
+from epidash.routes_auth import router as routes_auth, set_store as auth_viewer_set_store
 from epidash.store import Store
 
 logger = get_logger(__name__)
@@ -89,6 +90,7 @@ def create_app(store: Store | None = None, *, run_mcp_lifespan: bool = True) -> 
     auth_set_store(store)
     mcp_audit.set_store(store)
     routes_public.set_store(store)
+    auth_viewer_set_store(store)
     seed_bootstrap_key(store, settings.bootstrap_key)
 
     @asynccontextmanager
@@ -128,6 +130,7 @@ def create_app(store: Store | None = None, *, run_mcp_lifespan: bool = True) -> 
         return JSONResponse({"status": "ok"})
 
     app.include_router(routes_public.router)
+    app.include_router(routes_auth)
 
     if _STATIC_DIR.is_dir():
         app.mount("/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="static")

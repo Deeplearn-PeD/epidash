@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 
+from epidash.config import get_settings
 from epidash.logging import get_logger
 from epidash.store import Store, validate_chart_data
 
@@ -116,6 +117,15 @@ async def _fetch_envelope(
     source: dict, chart_kind: str, client: httpx.AsyncClient | None
 ) -> dict[str, Any]:
     kind, spec = source["kind"], source["spec"]
+
+    if kind == "postgres":
+        if chart_kind in ("kpi", "choropleth", "markdown"):
+            raise ValueError(
+                f"postgres sources cannot feed '{chart_kind}' charts"
+            )
+        columns, rows = await _run_postgres(spec)
+        return {"columns": columns, "rows": rows}
+
     url = spec.get("url", "")
     if not url:
         raise ValueError("data source spec has no 'url'")
@@ -154,6 +164,45 @@ async def _fetch_envelope(
             f"url_csv sources cannot feed '{chart_kind}' charts"
         )
     return data
+
+
+async def _run_postgres(spec: dict) -> tuple[list[str], list]:
+    """Run a read query against a registered DSN; returns (columns, rows).
+
+    DSNs are registered in the environment (``EPIDASH_PG_DSN_<NAME>``);
+    the spec carries only the logical ``source`` name and the ``sql``.
+    Values that don't map to JSON (dates, decimals, UUIDs) are coerced
+    to strings.
+    """
+    import asyncpg
+
+    name = str(spec.get("source", ""))
+    sql = str(spec.get("sql", "")).strip()
+    if not name or not sql:
+        raise ValueError("postgres spec needs 'source' and 'sql'")
+    dsn = get_settings().pg_sources.get(name)
+    if not dsn:
+        raise ValueError(f"unknown postgres source '{name}'")
+
+    def _coerce_value(v: Any) -> Any:
+        if v is None or isinstance(v, (int, float, str, bool)):
+            return v
+        return str(v)
+
+    connection = await asyncio.wait_for(
+        asyncpg.connect(dsn, timeout=FETCH_TIMEOUT_S), timeout=FETCH_TIMEOUT_S
+    )
+    try:
+        result = await asyncio.wait_for(
+            connection.fetch(sql), timeout=FETCH_TIMEOUT_S
+        )
+    finally:
+        await connection.close()
+    if not result:
+        raise ValueError("query returned no rows")
+    columns = [k for k in result[0].keys()]
+    rows = [[_coerce_value(v) for v in tuple(r)] for r in result]
+    return columns, rows
 
 
 def _coerce(cell: str) -> Any:

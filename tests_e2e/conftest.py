@@ -81,6 +81,10 @@ def server_url():
         d["id"], "table", title="States", position={"order": 3},
         data={"columns": ["state", "cases"], "rows": [["SP", 15], ["RJ", 15]]},
     )
+    store.add_chart(
+        d["id"], "markdown", title="Methodology", position={"order": 4, "width": "half"},
+        data={"text": "## Methodology\nData refreshed **weekly** from `INFO-DENGUE`."},
+    )
     store.set_dashboard_status(d["id"], "published")
     draft = store.create_dashboard("Hidden Draft", slug="e2e-draft")
     assert store.get_dashboard(draft["id"])
@@ -92,19 +96,20 @@ def server_url():
 
 
 @pytest.fixture(scope="session")
-def page(server_url):
-    """One browser context for the session; each test gets a fresh page."""
+def browser():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context(viewport={"width": 1280, "height": 900})
-        yield context
-        context.close()
+        yield browser
         browser.close()
 
 
 @pytest.fixture()
-def fresh_page(page: Page):
-    """A page navigated to a blank state before each test."""
-    new_page = page.new_page()
-    yield new_page
-    new_page.close()
+def fresh_page(browser):
+    """A fresh browser context per test: isolated storage/cookies and a
+    deterministic en-US locale (pt-BR is exercised explicitly via ?lang=)."""
+    context = browser.new_context(
+        viewport={"width": 1280, "height": 900}, locale="en-US"
+    )
+    page = context.new_page()
+    yield page
+    context.close()

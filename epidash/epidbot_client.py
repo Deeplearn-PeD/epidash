@@ -60,15 +60,20 @@ def build_tweak_message(dashboard: dict, charts: list[dict], request: str) -> st
     )
 
 
-def build_question_message(dashboard: dict, charts: list[dict], question: str) -> str:
+def build_question_message(
+    dashboard: dict, charts: list[dict], question: str,
+    requester: str | None = None,
+) -> str:
     """Prompt sent to the EpidBot agent when a viewer asks a question.
 
     Same chat pipeline as tweaks, but the agent must answer from the
     dashboard data and leave the dashboard untouched.
     """
     compact = _compact_charts(charts)
+    asked_by = f" (asked by {requester})" if requester else ""
     return (
-        f"A viewer of the EpiDash dashboard '{dashboard.get('title', '')}' "
+        f"A viewer{asked_by} of the EpiDash dashboard "
+        f"'{dashboard.get('title', '')}' "
         f"(dashboard_id={dashboard['id']}, slug={dashboard['slug']}) is asking "
         f"a QUESTION about it.\n\n"
         f"Current charts (JSON):\n{compact}\n\n"

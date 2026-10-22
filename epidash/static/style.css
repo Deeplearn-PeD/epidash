@@ -198,6 +198,38 @@ main { max-width: 1280px; margin: 0 auto; padding: 28px 24px 80px; }
 }
 .chart-card.full { grid-column: 1 / -1; }
 .chart-card h2 { margin: 0 0 10px; font-size: 15px; font-weight: 600; color: var(--muted); }
+.markdown-body { font-size: 14px; line-height: 1.55; color: var(--text); }
+.markdown-body h1, .markdown-body h2, .markdown-body h3 { margin: 4px 0 8px; line-height: 1.25; }
+.markdown-body h1 { font-size: 20px; }
+.markdown-body h2 { font-size: 17px; }
+.markdown-body h3 { font-size: 15px; }
+.markdown-body p { margin: 0 0 8px; }
+.markdown-body ul, .markdown-body ol { margin: 0 0 8px; padding-left: 22px; }
+.markdown-body code {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 12.5px;
+}
+.markdown-body pre {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  overflow-x: auto;
+}
+.markdown-body pre code { background: transparent; border: none; padding: 0; }
+.markdown-body table { border-collapse: collapse; margin-bottom: 8px; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--border); padding: 5px 10px; }
+.markdown-body blockquote {
+  margin: 0 0 8px;
+  padding: 2px 12px;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+}
+.markdown-body a { color: var(--accent-2); }
+.markdown-body :last-child { margin-bottom: 0; }
 .src-badge {
   font-size: 11px;
   font-weight: 500;
@@ -267,6 +299,15 @@ main { max-width: 1280px; margin: 0 auto; padding: 28px 24px 80px; }
 .tweak-msg.agent { background: rgba(88, 166, 255, 0.08); border: 1px solid rgba(88, 166, 255, 0.25); }
 .tweak-msg.error { color: var(--danger); }
 .tweak-msg .who { font-size: 11px; color: var(--muted); display: block; margin-bottom: 3px; }
+.tweak-msg.agent p { margin: 0 0 6px; }
+.tweak-msg.agent :last-child { margin-bottom: 0; }
+.tweak-msg.agent ul, .tweak-msg.agent ol { margin: 0 0 6px; padding-left: 20px; }
+.tweak-msg.agent code {
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 12px;
+}
 .tweak-input-row { display: flex; gap: 8px; }
 .tweak-send-col { display: flex; flex-direction: column; gap: 6px; justify-content: stretch; }
 .tweak-send-col button { min-width: 74px; }
@@ -323,3 +364,14 @@ main { max-width: 1280px; margin: 0 auto; padding: 28px 24px 80px; }
   .data-table th, .data-table td { border-bottom-color: #ddd; color: #111; }
   .kpi-value { color: #15803d; }
 }
+
+/* ── auth chip / login ────────────────────────────── */
+.auth-chip { margin-left: auto; font-size: 13px; }
+.auth-chip a {
+  color: var(--muted);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+.auth-chip a:hover { color: var(--accent); border-color: var(--accent); }

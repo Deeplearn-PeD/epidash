@@ -8,15 +8,39 @@ CREATE TABLE IF NOT EXISTS dashboards (
     layout TEXT NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
     created_by TEXT NOT NULL DEFAULT '',
+    visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'unlisted', 'restricted')),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     published_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS viewers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sub TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS viewer_likes (
+    viewer_id INTEGER NOT NULL REFERENCES viewers(id) ON DELETE CASCADE,
+    dashboard_id INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    PRIMARY KEY (viewer_id, dashboard_id)
+);
+
+CREATE TABLE IF NOT EXISTS share_tokens (
+    token TEXT PRIMARY KEY,
+    dashboard_id INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    expires_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS charts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     dashboard_id INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind IN ('line', 'bar', 'pie', 'kpi', 'table', 'choropleth')),
+    kind TEXT NOT NULL,
     title TEXT NOT NULL DEFAULT '',
     data TEXT NOT NULL DEFAULT '{}',
     spec TEXT NOT NULL DEFAULT '{}',
@@ -30,7 +54,7 @@ CREATE INDEX IF NOT EXISTS idx_charts_dashboard ON charts(dashboard_id);
 CREATE TABLE IF NOT EXISTS data_sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     chart_id INTEGER NOT NULL UNIQUE REFERENCES charts(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL CHECK (kind IN ('url_json', 'url_csv')),
+    kind TEXT NOT NULL,
     spec TEXT NOT NULL DEFAULT '{}',
     refresh_interval_s INTEGER NOT NULL DEFAULT 300,
     last_refreshed_at TEXT,
@@ -65,6 +89,7 @@ CREATE TABLE IF NOT EXISTS tweaks (
     dashboard_id INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,
     request TEXT NOT NULL,
     kind TEXT NOT NULL DEFAULT 'tweak' CHECK (kind IN ('tweak', 'question')),
+    viewer_id INTEGER REFERENCES viewers(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending', 'processing', 'completed', 'failed')),
     response TEXT,

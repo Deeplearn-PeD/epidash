@@ -24,6 +24,36 @@ let currentSlug = null;
 let currentDashboard = null;
 let pollTimer = null;
 let tweaksEnabled = false;
+let VIEWER = null; // {name, email} when logged in
+// share token from ?t= — appended to API calls so restricted dashboards
+// work from share links
+const SHARE_TOKEN = new URLSearchParams(location.search).get("t") || "";
+
+async function initViewer() {
+  try {
+    const me = await api("/auth/me");
+    VIEWER = me.viewer;
+    const chip = document.getElementById("auth-chip");
+    const link = document.getElementById("auth-link");
+    if (VIEWER) {
+      link.textContent = VIEWER.name || VIEWER.email || "…";
+      link.href = "/auth/logout";
+      chip.dataset.i18nTitle = "sign_out";
+      link.title = t("sign_out");
+    } else if (me.login_enabled) {
+      link.textContent = t("sign_in");
+      link.href = "/auth/login";
+    } else {
+      chip.hidden = true;
+    }
+  } catch (_) { /* auth probe is best effort */ }
+}
+
+function withToken(path) {
+  return SHARE_TOKEN
+    ? path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(SHARE_TOKEN)
+    : path;
+}
 
 const HEART_SVG =
   '<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">' +
@@ -70,14 +100,14 @@ async function showHome() {
   document.getElementById("dash-status").hidden = true;
   app.innerHTML =
     '<div class="home">' +
-    '<div class="home-head"><h1>Published dashboards</h1>' +
-    '<input id="dash-search" type="search" placeholder="Search dashboards…" aria-label="Search dashboards"></div>' +
+    `<div class="home-head"><h1>${t("home_title")}</h1>` +
+    `<input id="dash-search" type="search" placeholder="${t("search_placeholder")}" aria-label="${t("search_placeholder")}"></div>` +
     '<div id="list" class="dash-grid"></div></div>';
   let dashboards;
   try {
     dashboards = await api("/api/dashboards");
   } catch (e) {
-    app.innerHTML = `<p class="empty">Failed to load dashboards: ${esc(String(e))}</p>`;
+    app.innerHTML = `<p class="empty">${t("load_failed")}${esc(String(e))}</p>`;
     return;
   }
   const list = document.getElementById("list");
@@ -92,14 +122,14 @@ async function showHome() {
     );
     list.innerHTML = "";
     if (!matches.length) {
-      list.innerHTML = `<p class="empty">${dashboards.length ? "No dashboards match your search." : "No published dashboards yet."}</p>`;
+      list.innerHTML = `<p class="empty">${dashboards.length ? t("no_match") : t("no_dashboards")}</p>`;
       return;
     }
     for (const d of matches) {
       const a = document.createElement("a");
       a.className = "dash-card";
       a.href = `#/d/${d.slug}`;
-      const by = d.created_by ? `<span class="dash-card-by">by ${esc(d.created_by)}</span>` : "<span></span>";
+      const by = d.created_by ? `<span class="dash-card-by">${t("by")} ${esc(d.created_by)}</span>` : "<span></span>";
       a.innerHTML =
         `<h3>${esc(d.title)}</h3><p>${esc(d.description || "")}</p>` +
         `<p class="dash-card-meta">${by}<span>♥ ${d.likes ?? 0}</span></p>`;
@@ -114,13 +144,19 @@ async function showHome() {
 
 async function showDashboard(slug) {
   currentSlug = slug;
-  app.innerHTML = '<p class="empty">Loading…</p>';
+  app.innerHTML = `<p class="empty">${t("loading")}</p>`;
   let data;
   try {
-    data = await api(`/api/dashboards/${encodeURIComponent(slug)}`);
+    data = await api(withToken(`/api/dashboards/${encodeURIComponent(slug)}`));
   } catch (e) {
     currentDashboard = null;
-    app.innerHTML = '<p class="empty">Dashboard not found or not published.</p>';
+    if (e.status === 403) {
+      app.innerHTML =
+        `<p class="empty">${t("login_required")}</p>` +
+        '<p class="empty"><a class="action-btn" href="/auth/login">' + t("login_cta") + '</a></p>';
+    } else {
+      app.innerHTML = `<p class="empty">${t("not_found")}</p>`;
+    }
     tweakPanel.hidden = true;
     return;
   }
@@ -134,12 +170,12 @@ async function showDashboard(slug) {
   const status = document.getElementById("dash-status");
   status.hidden = false;
   status.classList.add("live");
-  status.textContent = "live";
+  status.textContent = t("live");
 
-  const byLine = data.created_by ? `by ${esc(data.created_by)}` : "";
+  const byLine = data.created_by ? `${t("by")} ${esc(data.created_by)}` : "";
   app.innerHTML = `
     <div class="dash-head">
-      <a class="back-link" href="#/">← All dashboards</a>
+      <a class="back-link" href="#/">${t("back")}</a>
       <div class="dash-title-row">
         <h1>${esc(data.title)}</h1>
         <div class="dash-actions">
@@ -147,14 +183,14 @@ async function showDashboard(slug) {
             ${HEART_SVG}<span id="like-count">${data.likes ?? 0}</span>
           </button>
           <div class="export-wrap">
-            <button id="export-btn" class="action-btn" title="Export this dashboard">⬇ Export</button>
+            <button id="export-btn" class="action-btn" title="${t("export_title")}">${t("export")}</button>
             <div id="export-menu" class="export-menu" hidden>
-              <button data-export="png">PNG image</button>
-              <button data-export="pdf">PDF (print)</button>
-              <button data-export="json">JSON data</button>
+              <button data-export="png">${t("export_png")}</button>
+              <button data-export="pdf">${t("export_pdf")}</button>
+              <button data-export="json">${t("export_json")}</button>
             </div>
           </div>
-          <button id="share-btn" class="action-btn" title="Copy a shareable link to this dashboard">🔗 Permalink</button>
+          <button id="share-btn" class="action-btn" title="${t("share_title")}">${t("permalink")}</button>
         </div>
       </div>
       <p class="dash-byline">${byLine}</p>
@@ -162,7 +198,7 @@ async function showDashboard(slug) {
     </div>
     <div class="chart-grid" id="charts"></div>`;
 
-  wireDashActions(slug, data.likes ?? 0);
+  wireDashActions(slug, data.likes ?? 0, !!data.viewer_liked);
   const grid = document.getElementById("charts");
 
   const charts = [...data.charts].sort(
@@ -180,14 +216,14 @@ async function showDashboard(slug) {
       renderChart(card.querySelector(".plot"), chart);
     } catch (e) {
       card.querySelector(".plot").innerHTML =
-        `<p class="empty">Failed to render chart: ${esc(String(e))}</p>`;
+        `<p class="empty">${t("render_failed")}${esc(String(e))}</p>`;
     }
   }
 
   if (tweaksEnabled) pollForUpdates(data.updated_at);
 }
 
-function wireDashActions(slug, serverLikes) {
+function wireDashActions(slug, serverLikes, viewerLiked = false) {
   const likeBtn = document.getElementById("like-btn");
   const likeCount = document.getElementById("like-count");
   const shareBtn = document.getElementById("share-btn");
@@ -197,10 +233,12 @@ function wireDashActions(slug, serverLikes) {
   const paint = (liked) => {
     likeCount.textContent = likes;
     likeBtn.classList.toggle("liked", liked);
-    likeBtn.title = liked ? "Unlike this dashboard" : "Like this dashboard";
+    likeBtn.title = liked ? t("unlike") : t("like");
   };
 
-  let liked = likedSet().has(slug);
+  // logged-in viewers get server-side like state; anonymous viewers fall
+  // back to a localStorage marker
+  let liked = VIEWER ? viewerLiked : likedSet().has(slug);
   // reconcile: a stored like that the server no longer counts was reset
   if (liked && likes === 0) { setLiked(slug, false); liked = false; }
   paint(liked);
@@ -211,12 +249,12 @@ function wireDashActions(slug, serverLikes) {
     const goingToLike = !liked;
     likeCount.textContent = likes + (goingToLike ? 1 : -1); // optimistic
     try {
-      const res = await api(`/api/dashboards/${encodeURIComponent(slug)}/like`, {
+      const res = await api(withToken(`/api/dashboards/${encodeURIComponent(slug)}/like`), {
         method: goingToLike ? "POST" : "DELETE",
       });
       likes = res.likes;
       liked = goingToLike;
-      setLiked(slug, liked);
+      if (!VIEWER) setLiked(slug, liked);
     } catch (_) { /* keep server truth on failure */ }
     paint(liked);
     busy = false;
@@ -238,7 +276,7 @@ function wireDashActions(slug, serverLikes) {
         document.execCommand("copy");
         ta.remove();
       }
-      shareBtn.textContent = "✓ Copied!";
+      shareBtn.textContent = t("copied");
     } catch (_) {
       shareBtn.textContent = url;
     }
@@ -354,8 +392,10 @@ async function exportPng() {
     }
     const kpi = card.querySelector(".kpi-row");
     const table = card.querySelector(".data-table");
+    const md = card.querySelector(".markdown-body");
     if (kpi) drawKpiCard(ctx, kpi, rel);
     else if (table) drawTableCard(ctx, table, rel, H);
+    else if (md) drawMarkdownCard(ctx, md, rel, H);
   }
 
   const a = document.createElement("a");
@@ -444,16 +484,45 @@ function drawClipped(ctx, text, x, y, maxW) {
   ctx.fillText(t, x, y);
 }
 
+function wrapText(ctx, text, maxW) {
+  const out = [];
+  let cur = "";
+  for (const w of String(text).split(/\s+/).filter(Boolean)) {
+    const test = cur ? cur + " " + w : w;
+    if (ctx.measureText(test).width > maxW && cur) { out.push(cur); cur = w; }
+    else cur = test;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
+function drawMarkdownCard(ctx, mdEl, rel, canvasH) {
+  // markdown is exported as wrapped plain text (documented limitation)
+  const r = rel(mdEl);
+  ctx.font = `14px ${EXPORT_FONT}`;
+  let y = r.y;
+  for (const raw of String(mdEl.innerText || "").split("\n")) {
+    const line = raw.trimEnd();
+    if (!line) { y += 10; continue; }
+    for (const piece of wrapText(ctx, line, r.w)) {
+      if (y > canvasH - 30) return;
+      ctx.fillStyle = "#e6edf3";
+      ctx.fillText(piece, r.x, y);
+      y += 20;
+    }
+  }
+}
+
 async function pollForUpdates(since) {
   stopTweakPolling();
   const slug = currentSlug;
   const tick = async () => {
     if (currentSlug !== slug) return;
     try {
-      const head = await api(`/api/dashboards/${encodeURIComponent(slug)}`);
+      const head = await api(withToken(`/api/dashboards/${encodeURIComponent(slug)}`));
       if (head.updated_at !== since && currentSlug === slug) {
         await showDashboard(slug);
-        addTweakMsg("agent", "Dashboard updated.");
+        addTweakMsg("agent", t("updated"));
         return;
       }
     } catch (_) { /* transient; keep polling */ }
@@ -468,12 +537,46 @@ function stopTweakPolling() {
 
 // ───────────────────────────── renderers ───────────────────────────
 
+// Plotly (4.8 MB) is loaded on demand: home/gallery pages never fetch it.
+let plotlyPromise = null;
+function ensurePlotly() {
+  if (window.Plotly) return Promise.resolve();
+  if (!plotlyPromise) {
+    plotlyPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "/vendor/plotly.min.js";
+      s.onload = () => resolve();
+      s.onerror = () => {
+        plotlyPromise = null;
+        reject(new Error("Failed to load the charting library"));
+      };
+      document.head.appendChild(s);
+    });
+  }
+  return plotlyPromise;
+}
+
 function renderChart(el, chart) {
   const { kind, data, spec = {} } = chart;
   if (kind === "kpi") return renderKpi(el, data, spec);
   if (kind === "table") return renderTable(el, data, spec);
   if (kind === "choropleth") return renderChoropleth(el, data, spec);
-  return renderPlotlyChart(el, kind, data, spec);
+  if (kind === "markdown") return renderMarkdown(el, data);
+  el.innerHTML = `<p class="empty">${t("loading_chart")}</p>`;
+  ensurePlotly()
+    .then(() => renderPlotlyChart(el, kind, data, spec))
+    .catch((e) => {
+      el.innerHTML = `<p class="empty">${t("render_failed")}${esc(String(e))}</p>`;
+    });
+}
+
+function renderMarkdownText(text) {
+  // All markdown passes DOMPurify before touching the DOM.
+  return DOMPurify.sanitize(marked.parse(String(text || "")));
+}
+
+function renderMarkdown(el, data) {
+  el.innerHTML = `<div class="markdown-body">${renderMarkdownText(data.text)}</div>`;
 }
 
 function formatKpiValue(value) {
@@ -532,7 +635,10 @@ function renderTable(el, data, spec) {
 function renderChoropleth(el, data, spec) {
   const locations = Object.keys(data.values || {});
   const z = locations.map(k => data.values[k]);
-  fetch("/geo/br-states.json").then(r => r.json()).then(geojson => {
+  Promise.all([
+    fetch("/geo/br-states.json").then(r => r.json()),
+    ensurePlotly(),
+  ]).then(([geojson]) => {
     const trace = {
       type: "choropleth",
       geojson,
@@ -672,26 +778,26 @@ async function sendTweak(kind) {
 }
 
 async function pollTweak(tweakId) {
-  addTweakMsg("agent", "EpidBot is working on it…", true);
+  addTweakMsg("agent", t("working"), true);
   const started = Date.now();
   const tick = async () => {
     try {
       const t = await api(`/api/tweaks/${tweakId}`);
       if (t.status === "completed") {
         clearPendingMsg();
-        addTweakMsg("agent", t.response || "Done.");
+        addTweakMsg("agent", t.response || t("done"));
         setSendBusy(false);
         return;
       }
       if (t.status === "failed") {
         clearPendingMsg();
-        addTweakMsg("error", t.error || "The request failed.");
+        addTweakMsg("error", t.error || t("request_failed"));
         setSendBusy(false);
         return;
       }
       if (Date.now() - started > 6 * 60 * 1000) {
         clearPendingMsg();
-        addTweakMsg("error", "Timed out waiting for EpidBot.");
+        addTweakMsg("error", t("timeout"));
         setSendBusy(false);
         return;
       }
@@ -709,8 +815,10 @@ function addTweakMsg(kind, text, pending = false) {
   const div = document.createElement("div");
   div.className = `tweak-msg ${kind}`;
   if (pending) div.dataset.pending = "1";
-  const who = { user: "You", agent: "EpidBot", error: "Error" }[kind] || kind;
-  div.innerHTML = `<span class="who">${who}</span>${esc(text)}`;
+  const who = { user: t("who_user"), agent: t("who_agent"), error: t("who_error") }[kind] || kind;
+  // EpidBot replies are markdown; user input and errors stay plain text.
+  const body = kind === "agent" ? renderMarkdownText(text) : esc(text);
+  div.innerHTML = `<span class="who">${who}</span>${body}`;
   tweakLog.appendChild(div);
   tweakLog.scrollTop = tweakLog.scrollHeight;
 }
@@ -739,4 +847,5 @@ function esc(s) {
   })[c]);
 }
 
+initViewer();
 route();

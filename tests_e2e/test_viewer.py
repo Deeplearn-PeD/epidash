@@ -32,6 +32,10 @@ class TestHome:
         fresh_page.fill("#dash-search", "dengue")
         expect(fresh_page.locator(".dash-card")).to_have_count(1)
 
+    def test_auth_chip_hidden_without_oidc(self, fresh_page, server_url):
+        fresh_page.goto(f"{server_url}/#/")
+        expect(fresh_page.locator("#auth-chip")).to_be_hidden()
+
     def test_draft_not_listed(self, fresh_page, server_url):
         fresh_page.goto(f"{server_url}/#/")
         expect(fresh_page.locator("body")).not_to_contain_text("Hidden Draft")
@@ -42,8 +46,16 @@ class TestDashboardView:
         fresh_page.goto(f"{server_url}/#/d/e2e-dengue")
         expect(fresh_page.locator(".dash-head h1")).to_have_text("Dengue E2E")
         expect(fresh_page.locator(".dash-byline")).to_have_text("by EpidBot")
-        expect(fresh_page.locator(".chart-card")).to_have_count(3)
+        expect(fresh_page.locator(".chart-card")).to_have_count(4)
         expect(fresh_page.locator(".back-link")).to_be_visible()
+
+    def test_markdown_block_renders(self, fresh_page, server_url):
+        fresh_page.goto(f"{server_url}/#/d/e2e-dengue")
+        body = fresh_page.locator(".markdown-body")
+        expect(body).to_be_visible()
+        expect(body.locator("h2")).to_have_text("Methodology")
+        expect(body.locator("strong")).to_have_text("weekly")
+        expect(body.locator("code")).to_have_text("INFO-DENGUE")
 
     def test_kpi_uses_thousands_separator(self, fresh_page, server_url):
         fresh_page.goto(f"{server_url}/#/d/e2e-dengue")
@@ -76,6 +88,40 @@ class TestDashboardView:
         expect(fresh_page.locator(".empty")).to_contain_text(
             "not found or not published"
         )
+
+
+class TestI18n:
+    def test_portuguese_via_query_param(self, fresh_page, server_url):
+        fresh_page.goto(f"{server_url}/?lang=pt-BR#/")
+        expect(fresh_page.locator(".home-head h1")).to_have_text(
+            "Painéis publicados"
+        )
+        expect(fresh_page.locator("#dash-search")).to_have_attribute(
+            "placeholder", "Buscar painéis…"
+        )
+        expect(fresh_page.locator("#ask-send")).to_have_text("Perguntar")
+
+    def test_english_default(self, fresh_page, server_url):
+        fresh_page.goto(f"{server_url}/#/")
+        expect(fresh_page.locator(".home-head h1")).to_have_text(
+            "Published dashboards"
+        )
+
+
+class TestLazyPlotly:
+    def test_home_never_downloads_plotly(self, fresh_page, server_url):
+        urls = []
+        fresh_page.on("request", lambda r: urls.append(r.url))
+        fresh_page.goto(f"{server_url}/#/")
+        fresh_page.wait_for_selector(".dash-card")
+        assert not any("plotly" in u for u in urls), "home fetched plotly.min.js"
+
+    def test_dashboard_downloads_plotly(self, fresh_page, server_url):
+        urls = []
+        fresh_page.on("request", lambda r: urls.append(r.url))
+        fresh_page.goto(f"{server_url}/#/d/e2e-dengue")
+        fresh_page.wait_for_selector(".js-plotly-plot")
+        assert any("plotly" in u for u in urls)
 
 
 class TestExport:

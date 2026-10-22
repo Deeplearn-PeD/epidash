@@ -10,11 +10,13 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 dependencies = [
+    "asyncpg>=0.30",
     "fastapi>=0.115.0",
     "httpx>=0.28.0",
     # 1.x API (mcp.server.fastmcp.FastMCP) — EpidBot parity; 2.x renamed it.
     "mcp>=1.10,<2",
     "pydantic>=2.9",
+    "pyjwt[crypto]>=2.8",
     "uvicorn[standard]>=0.32.0",
 ]
 

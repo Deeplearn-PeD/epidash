@@ -30,6 +30,7 @@ from epidash.epidbot_client import (
     build_tweak_message,
 )
 from epidash.logging import get_logger
+from epidash.routes_auth import get_viewer_from_request
 from epidash.store import Store
 
 logger = get_logger(__name__)
@@ -82,11 +83,28 @@ def _tweak_rate_limited(slug: str) -> bool:
     return _rate_limited(slug, _tweak_windows, get_settings().tweak_rate_limit_per_hour)
 
 
-def _get_published(store: Store, slug: str) -> dict:
-    """Published dashboard by slug or 404 (drafts are MCP-only)."""
+def _get_published(
+    store: Store,
+    slug: str,
+    viewer: dict | None = None,
+    token: str | None = None,
+) -> dict:
+    """Published dashboard by slug with visibility enforced.
+
+    public: anyone; unlisted: anyone with the link (hidden from the
+    gallery); restricted: logged-in viewers or a valid share token.
+    Drafts are MCP-only (404).
+    """
     dashboard = store.get_dashboard_by_slug(slug)
     if dashboard is None or dashboard["status"] != "published":
         raise HTTPException(status_code=404, detail="Dashboard not found")
+    if dashboard["visibility"] == "restricted":
+        if viewer is None and not (
+            token and store.share_token_valid(token, dashboard["id"])
+        ):
+            raise HTTPException(
+                status_code=403, detail="Login required to view this dashboard"
+            )
     return dashboard
 
 
@@ -104,8 +122,10 @@ def _public_dashboard(dashboard: dict) -> dict:
 
 
 @router.get("/dashboards")
-async def list_published_dashboards() -> list[dict]:
+async def list_published_dashboards(request: Request) -> list[dict]:
     store = get_store()
+    # the gallery lists public dashboards only; unlisted/restricted stay
+    # reachable via direct link / share tokens
     return [
         {
             "slug": d["slug"],
@@ -116,13 +136,17 @@ async def list_published_dashboards() -> list[dict]:
             "updated_at": d["updated_at"],
         }
         for d in store.list_dashboards(include_unpublished=False)
+        if d["visibility"] == "public"
     ]
 
 
 @router.get("/dashboards/{slug}")
-async def get_published_dashboard(slug: str) -> dict:
+async def get_published_dashboard(slug: str, request: Request) -> dict:
     store = get_store()
-    dashboard = _get_published(store, slug)
+    viewer = get_viewer_from_request(request)
+    dashboard = _get_published(
+        store, slug, viewer=viewer, token=request.query_params.get("token")
+    )
     try:
         store.record_view(dashboard["id"])
     except Exception as e:  # noqa: BLE001 — view counting is best effort
@@ -137,37 +161,53 @@ async def get_published_dashboard(slug: str) -> dict:
                 "refresh_interval_s": source["refresh_interval_s"],
                 "last_refreshed_at": source["last_refreshed_at"],
             }
+    liked = viewer is not None and store.has_viewer_like(viewer["id"], dashboard["id"])
     return {
         **_public_dashboard(dashboard),
         "likes": store.get_likes(dashboard["id"]),
+        "viewer_liked": liked,
         "charts": charts,
         "tweaks_enabled": get_settings().epidbot_configured,
     }
 
 
 @router.post("/dashboards/{slug}/like")
-async def like_dashboard(slug: str) -> dict:
+async def like_dashboard(slug: str, request: Request) -> dict:
     store = get_store()
-    dashboard = _get_published(store, slug)
+    viewer = get_viewer_from_request(request)
+    dashboard = _get_published(
+        store, slug, viewer=viewer, token=request.query_params.get("token")
+    )
     if _rate_limited(slug, _like_windows, LIKE_RATE_LIMIT_PER_HOUR):
         raise HTTPException(status_code=429, detail="Too many like actions; try again later")
+    if viewer is not None and not store.add_viewer_like(viewer["id"], dashboard["id"]):
+        # already liked by this viewer — count unchanged, idempotent
+        return {"slug": slug, "likes": store.get_likes(dashboard["id"])}
     return {"slug": slug, "likes": store.record_like(dashboard["id"])}
 
 
 @router.delete("/dashboards/{slug}/like")
-async def unlike_dashboard(slug: str) -> dict:
+async def unlike_dashboard(slug: str, request: Request) -> dict:
     store = get_store()
-    dashboard = _get_published(store, slug)
+    viewer = get_viewer_from_request(request)
+    dashboard = _get_published(
+        store, slug, viewer=viewer, token=request.query_params.get("token")
+    )
     if _rate_limited(slug, _like_windows, LIKE_RATE_LIMIT_PER_HOUR):
         raise HTTPException(status_code=429, detail="Too many like actions; try again later")
+    if viewer is not None and not store.remove_viewer_like(viewer["id"], dashboard["id"]):
+        return {"slug": slug, "likes": store.get_likes(dashboard["id"])}
     return {"slug": slug, "likes": store.remove_like(dashboard["id"])}
 
 
 @router.get("/dashboards/{slug}/export")
-async def export_dashboard(slug: str) -> JSONResponse:
+async def export_dashboard(slug: str, request: Request) -> JSONResponse:
     """Download the full dashboard definition (re-importable via MCP)."""
     store = get_store()
-    dashboard = _get_published(store, slug)
+    viewer = get_viewer_from_request(request)
+    dashboard = _get_published(
+        store, slug, viewer=viewer, token=request.query_params.get("token")
+    )
     payload = {
         "app": "epidash",
         "slug": dashboard["slug"],
@@ -205,7 +245,10 @@ class TweakSubmitted(BaseModel):
 @router.post("/dashboards/{slug}/tweak", status_code=202)
 async def submit_tweak(slug: str, body: TweakRequest, request: Request) -> TweakSubmitted:
     store = get_store()
-    dashboard = _get_published(store, slug)
+    viewer = get_viewer_from_request(request)
+    dashboard = _get_published(
+        store, slug, viewer=viewer, token=request.query_params.get("token")
+    )
     settings = get_settings()
     if not settings.epidbot_configured:
         raise HTTPException(
@@ -217,17 +260,25 @@ async def submit_tweak(slug: str, body: TweakRequest, request: Request) -> Tweak
             status_code=429, detail="Too many tweak requests; try again later"
         )
 
-    tweak = store.create_tweak(dashboard["id"], body.request, kind="tweak")
+    tweak = store.create_tweak(
+        dashboard["id"], body.request, kind="tweak",
+        viewer_id=viewer["id"] if viewer else None,
+    )
     asyncio.create_task(_process_tweak(tweak["id"], dashboard, body.request))
     return TweakSubmitted(tweak_id=tweak["id"], status=tweak["status"])
 
 
 @router.post("/dashboards/{slug}/ask", status_code=202)
-async def ask_about_dashboard(slug: str, body: TweakRequest, request: Request) -> TweakSubmitted:
+async def ask_about_dashboard(
+    slug: str, body: TweakRequest, request: Request
+) -> TweakSubmitted:
     """Viewer question about a published dashboard — an EpidBot chat turn
     that answers from the dashboard data without modifying it."""
     store = get_store()
-    dashboard = _get_published(store, slug)
+    viewer = get_viewer_from_request(request)
+    dashboard = _get_published(
+        store, slug, viewer=viewer, token=request.query_params.get("token")
+    )
     settings = get_settings()
     if not settings.epidbot_configured:
         raise HTTPException(
@@ -235,12 +286,14 @@ async def ask_about_dashboard(slug: str, body: TweakRequest, request: Request) -
             detail="EpidBot integration is not configured on this server",
         )
     if _rate_limited(slug, _ask_windows, settings.ask_rate_limit_per_hour):
-        raise HTTPException(
-            status_code=429, detail="Too many questions; try again later"
-        )
+        raise HTTPException(status_code=429, detail="Too many questions; try again later")
 
-    tweak = store.create_tweak(dashboard["id"], body.request, kind="question")
-    asyncio.create_task(_process_question(tweak["id"], dashboard, body.request))
+    tweak = store.create_tweak(
+        dashboard["id"], body.request, kind="question",
+        viewer_id=viewer["id"] if viewer else None,
+    )
+    requester = viewer["name"] if viewer else None
+    asyncio.create_task(_process_question(tweak["id"], dashboard, body.request, requester))
     return TweakSubmitted(tweak_id=tweak["id"], status=tweak["status"])
 
 
@@ -269,23 +322,33 @@ async def _process_tweak(tweak_id: str, dashboard: dict, request_text: str) -> N
     await _process_epidbot_turn(tweak_id, message, "Tweak")
 
 
-async def _process_question(tweak_id: str, dashboard: dict, question: str) -> None:
+async def _process_question(
+    tweak_id: str, dashboard: dict, question: str, requester: str | None = None
+) -> None:
     """Background task: send the question turn to EpidBot (read-only)."""
     message = build_question_message(
-        dashboard, get_store().list_charts(dashboard["id"]), question
+        dashboard, get_store().list_charts(dashboard["id"]), question,
+        requester=requester,
     )
     await _process_epidbot_turn(tweak_id, message, "Question")
 
 
 @router.get("/tweaks/{tweak_id}")
 async def get_tweak(tweak_id: str) -> dict:
-    tweak = get_store().get_tweak(tweak_id)
+    store = get_store()
+    tweak = store.get_tweak(tweak_id)
     if tweak is None:
         raise HTTPException(status_code=404, detail="Tweak not found")
+    viewer = (
+        store.get_viewer(tweak["viewer_id"])
+        if tweak.get("viewer_id")
+        else None
+    )
     return {
         "tweak_id": tweak["id"],
         "dashboard_id": tweak["dashboard_id"],
         "kind": tweak.get("kind", "tweak"),
+        "viewer": viewer["name"] if viewer else None,
         "status": tweak["status"],
         "response": tweak["response"],
         "error": tweak["error"],

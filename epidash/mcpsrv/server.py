@@ -12,8 +12,10 @@ admin MCP server:
   derives the tool name and schema from the wrapped function.
 """
 
+import datetime
 import functools
 import inspect
+import secrets
 from typing import Any, Literal, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -317,13 +319,13 @@ async def delete_dashboard(dashboard_id: int, confirm: bool = False) -> dict:
 @_audited("add_chart", target_type="chart")
 async def add_chart(
     dashboard_id: int,
-    kind: Literal["line", "bar", "pie", "kpi", "table", "choropleth"],
+    kind: Literal["line", "bar", "pie", "kpi", "table", "choropleth", "markdown"],
     title: str = "",
     data: Optional[dict] = None,
     spec: Optional[dict] = None,
     position: Optional[dict] = None,
 ) -> dict:
-    """Add a chart to a dashboard. kind: line|bar|pie|kpi|table|choropleth.
+    """Add a chart to a dashboard. kind: line|bar|pie|kpi|table|choropleth|markdown.
 
     data envelopes:
     - line/bar/pie/table: {"columns": ["month", "cases"],
@@ -331,6 +333,8 @@ async def add_chart(
     - kpi: {"value": 1234, "label": "Cases", "unit": "", "delta": "+12%"}
     - choropleth: {"values": {"SP": 120, "RJ": 90}, "region_level": "uf",
       "label": "cases"} (UF codes)
+    - markdown: {"text": "## Notes\nSome **narrative** between charts"}
+      (rendered as a narrative block; markdown supported)
     spec: optional style overrides (Plotly trace/layout fragments, e.g.
     {"color": "#4ade80"} or {"y_label": "cases"}). position: ordering/
     width hints, e.g. {"order": 1, "width": "half"}."""
@@ -349,7 +353,7 @@ async def add_chart(
 @_audited("update_chart", target_type="chart", target_id_arg="chart_id")
 async def update_chart(
     chart_id: int,
-    kind: Optional[Literal["line", "bar", "pie", "kpi", "table", "choropleth"]] = None,
+    kind: Optional[Literal["line", "bar", "pie", "kpi", "table", "choropleth", "markdown"]] = None,
     title: Optional[str] = None,
     data: Optional[dict] = None,
     spec: Optional[dict] = None,
@@ -397,29 +401,44 @@ async def remove_chart(chart_id: int, confirm: bool = False) -> dict:
 @_audited("attach_data_source", target_type="chart", target_id_arg="chart_id")
 async def attach_data_source(
     chart_id: int,
-    kind: Literal["url_json", "url_csv"],
-    url: str,
+    kind: Literal["url_json", "url_csv", "postgres"],
+    url: Optional[str] = None,
     refresh_interval_s: int = 300,
     path: Optional[str] = None,
+    source: Optional[str] = None,
+    sql: Optional[str] = None,
 ) -> dict:
-    """Make a chart auto-update from a remote URL. kind: url_json (payload
-    is the chart's data envelope; optional dotted `path` extracts a nested
-    object) or url_csv (header row + rows; feeds line/bar/pie/table).
-    refresh_interval_s: minimum 30. The source is refreshed immediately on
-    attach; failures are recorded on the source (see get_data_source) and
-    never lose the chart's existing data."""
+    """Make a chart auto-update from remote data. kind:
+    url_json (payload is the chart's data envelope; optional dotted `path`
+    extracts a nested object), url_csv (header row + rows; feeds
+    line/bar/pie/table), or postgres (server-side query — pass `source`:
+    the registered DSN name, and `sql`: the query; DSNs live in the
+    EPIDASH_PG_DSN_<NAME> environment variables of this server, never in
+    the database). refresh_interval_s: minimum 30. The source is refreshed
+    immediately on attach; failures are recorded on the source (see
+    get_data_source) and never lose the chart's existing data."""
+    if kind == "postgres":
+        spec = {"source": source or "", "sql": sql or ""}
+    else:
+        if not url:
+            raise ToolError(f"kind '{kind}' needs a url")
+        spec = {"url": url, **({"path": path} if path else {})}
     try:
-        source = _get_store().set_data_source(
-            chart_id, kind,
-            spec={"url": url, **({"path": path} if path else {})},
-            refresh_interval_s=refresh_interval_s,
+        registered = get_settings().pg_sources
+        if kind == "postgres" and (source or "") not in registered:
+            raise ToolError(
+                f"unknown postgres source '{source}'; registered sources: "
+                f"{sorted(registered) or 'none'}"
+            )
+        attached = _get_store().set_data_source(
+            chart_id, kind, spec, refresh_interval_s=refresh_interval_s
         )
     except ValueError as e:
         raise ToolError(str(e)) from e
     from epidash import refresher
 
     outcome = await refresher.refresh_source(_get_store(), chart_id)
-    return {**source, "last_refresh": outcome}
+    return {**attached, "last_refresh": outcome}
 
 
 @mcp.tool()
@@ -500,3 +519,84 @@ async def style_charts(dashboard_id: int, spec: dict) -> dict:
     except ValueError as e:
         raise ToolError(str(e)) from e
     return {"dashboard_id": dashboard_id, "charts_styled": count, "spec": spec}
+
+
+# ── mutating tools: access control ───────────────────────────────────────
+
+
+@mcp.tool()
+@_audited("set_dashboard_access", target_type="dashboard", target_id_arg="dashboard_id")
+async def set_dashboard_access(
+    dashboard_id: int,
+    visibility: Literal["public", "unlisted", "restricted"],
+    confirm: bool = False,
+) -> dict:
+    """Control who can reach a published dashboard: public (gallery +
+    link), unlisted (link only — hidden from the gallery), restricted
+    (logged-in viewers or valid share tokens only). Re-run with
+    confirm=true to proceed."""
+    _require_confirm(
+        confirm, f"set_dashboard_access({dashboard_id}, {visibility})",
+        f"changes who can reach this dashboard to '{visibility}'",
+    )
+    try:
+        dashboard = _get_store().set_dashboard_visibility(dashboard_id, visibility)
+    except ValueError as e:
+        raise ToolError(str(e)) from e
+    if dashboard is None:
+        raise ToolError(f"dashboard {dashboard_id} not found")
+    return dashboard
+
+
+@mcp.tool()
+@_audited("create_share_token", target_type="dashboard", target_id_arg="dashboard_id")
+async def create_share_token(
+    dashboard_id: int,
+    expires_in_days: int = 7,
+    confirm: bool = False,
+) -> dict:
+    """Create a share link that reaches even restricted dashboards.
+    expires_in_days: token lifetime (1-365). Re-run with confirm=true to
+    proceed — anyone holding the link can view the dashboard."""
+    _require_confirm(
+        confirm, f"create_share_token({dashboard_id})",
+        "creates a link that grants view access to this dashboard",
+    )
+    store = _get_store()
+    if store.get_dashboard(dashboard_id) is None:
+        raise ToolError(f"dashboard {dashboard_id} not found")
+    expires_in_days = min(max(expires_in_days, 1), 365)
+    token = "st_" + secrets.token_urlsafe(18)
+    expires_at = (
+        datetime.datetime.now(datetime.timezone.utc)
+        + datetime.timedelta(days=expires_in_days)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    row = store.create_share_token(
+        dashboard_id, token, expires_at,
+        created_by=(get_current_key().get("name", "") or ""),
+    )
+    settings = get_settings()
+    return {
+        **row,
+        "url": f"{settings.base_url.rstrip('/')}/?t={token}#/d/",
+    }
+
+
+@mcp.tool()
+async def list_share_tokens(dashboard_id: int) -> list:
+    """Share tokens created for one dashboard (newest first)."""
+    return _get_store().list_share_tokens(dashboard_id)
+
+
+@mcp.tool()
+@_audited("revoke_share_token", target_type="dashboard")
+async def revoke_share_token(token: str, confirm: bool = False) -> dict:
+    """Revoke a share token: links that used it stop working. Re-run with
+    confirm=true to proceed."""
+    _require_confirm(
+        confirm, f"revoke_share_token({token[:8]}...)",
+        "invalidates this share link permanently",
+    )
+    if _get_store().revoke_share_token(token):
+        return {"token": token, "revoked": True}
+    raise ToolError("share token not found")

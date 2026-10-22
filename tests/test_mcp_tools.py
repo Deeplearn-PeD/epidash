@@ -334,6 +334,40 @@ class TestDataSourceTools:
             chart = await self._chart(store)
             with pytest.raises(ToolError, match="at least 30"):
                 await mcp_server.attach_data_source(chart["id"], "url_json", "u", 5)
+            with pytest.raises(ToolError, match="needs a url"):
+                await mcp_server.attach_data_source(chart["id"], "url_json")
+
+    async def test_attach_postgres_source(self, env, monkeypatch):
+        import os
+
+        store, _ = env
+        monkeypatch.setenv("EPIDASH_PG_DSN_DENGUE", "postgres://ro@db.test/dengue")
+        async with keyed_context(store):
+            chart = await self._chart(store)
+
+            async def fake_refresh(s, chart_id, client=None):
+                s.record_data_source_refresh(chart_id, "ok")
+                return {"status": "ok"}
+
+            monkeypatch.setattr("epidash.refresher.refresh_source", fake_refresh)
+            src = await mcp_server.attach_data_source(
+                chart["id"], "postgres", source="dengue",
+                sql="SELECT month, cases FROM weekly", refresh_interval_s=60,
+            )
+            assert src["kind"] == "postgres"
+            # DSN never stored — only the logical name
+            assert store.get_data_source(chart["id"])["spec"] == {
+                "source": "dengue", "sql": "SELECT month, cases FROM weekly"
+            }
+
+            with pytest.raises(ToolError, match="unknown postgres source"):
+                await mcp_server.attach_data_source(
+                    chart["id"], "postgres", source="nope", sql="SELECT 1"
+                )
+            with pytest.raises(ToolError, match="'sql'"):
+                await mcp_server.attach_data_source(
+                    chart["id"], "postgres", source="dengue"
+                )
 
     async def test_get_missing_source(self, env):
         store, _ = env
@@ -395,6 +429,29 @@ class TestDataSourceTools:
             with pytest.raises(ToolError, match="non-empty"):
                 await mcp_server.style_charts(d["id"], {})
 
+    async def test_markdown_chart_envelope(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("D")
+            c = await mcp_server.add_chart(
+                d["id"], "markdown", title="Notes",
+                data={"text": "## Resumo\n- caso 1\n- caso 2"},
+            )
+            assert c["kind"] == "markdown"
+            got = await mcp_server.get_dashboard(d["id"])
+            assert "Resumo" in got["charts"][0]["data"]["text"]
+
+    async def test_markdown_validation(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("D")
+            with pytest.raises(ToolError, match="'text'"):
+                await mcp_server.add_chart(d["id"], "markdown", data={})
+            with pytest.raises(ToolError, match="too long"):
+                await mcp_server.add_chart(
+                    d["id"], "markdown", data={"text": "x" * 10_001}
+                )
+
     async def test_audit_log_filters(self, env):
         store, _ = env
         async with keyed_context(store):
@@ -406,3 +463,49 @@ class TestDataSourceTools:
             assert {r["action"] for r in only_create} == {"create_dashboard"}
             only_this = await mcp_server.get_audit_log(dashboard_id=d["id"])
             assert all(r["target_id"] == str(d["id"]) for r in only_this)
+
+
+class TestAccessTools:
+    """set_dashboard_access + share token lifecycle via MCP."""
+
+    async def test_set_visibility_requires_confirm(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("D", slug="vis")
+            with pytest.raises(ToolError, match="NOT executed"):
+                await mcp_server.set_dashboard_access(d["id"], "unlisted")
+            out = await mcp_server.set_dashboard_access(
+                d["id"], "restricted", confirm=True
+            )
+            assert out["visibility"] == "restricted"
+
+    async def test_invalid_visibility(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("D", slug="vis2")
+            with pytest.raises(ToolError, match="invalid visibility"):
+                await mcp_server.set_dashboard_access(d["id"], "secret", confirm=True)
+
+    async def test_share_token_lifecycle(self, env):
+        store, settings = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("D", slug="share")
+            with pytest.raises(ToolError, match="NOT executed"):
+                await mcp_server.create_share_token(d["id"])
+            out = await mcp_server.create_share_token(
+                d["id"], expires_in_days=7, confirm=True
+            )
+            assert out["token"].startswith("st_")
+            assert f"?t={out['token']}#/d/" in out["url"]
+            listed = await mcp_server.list_share_tokens(d["id"])
+            assert [r["token"] for r in listed] == [out["token"]]
+            revoked = await mcp_server.revoke_share_token(out["token"], confirm=True)
+            assert revoked["revoked"] is True
+            with pytest.raises(ToolError, match="not found"):
+                await mcp_server.revoke_share_token(out["token"], confirm=True)
+
+    async def test_create_share_token_missing_dashboard(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            with pytest.raises(ToolError, match="not found"):
+                await mcp_server.create_share_token(999, confirm=True)

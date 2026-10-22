@@ -11,6 +11,7 @@ import os
 import secrets
 import sqlite3
 import hashlib
+import time
 from contextlib import contextmanager
 from typing import Any
 
@@ -18,9 +19,12 @@ logger = logging.getLogger("epidash.store")
 
 _SCHEMA_PATH = os.path.join(os.path.dirname(__file__), "schema.sql")
 
-CHART_KINDS = ("line", "bar", "pie", "kpi", "table", "choropleth")
+CHART_KINDS = ("line", "bar", "pie", "kpi", "table", "choropleth", "markdown")
 
-DATA_SOURCE_KINDS = ("url_json", "url_csv")
+DATA_SOURCE_KINDS = ("url_json", "url_csv", "postgres")
+
+# Chart kinds rendered as narrative blocks instead of plots.
+MARKDOWN_MAX_CHARS = 10_000
 
 
 def validate_chart_data(kind: str, data: dict) -> None:
@@ -58,6 +62,15 @@ def validate_chart_data(kind: str, data: dict) -> None:
                 raise ValueError(
                     "'choropleth' values must map two-letter UF codes to numbers"
                 )
+    elif kind == "markdown":
+        text = data.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("'markdown' data needs 'text': a non-empty string")
+        if len(text) > MARKDOWN_MAX_CHARS:
+            raise ValueError(
+                f"'markdown' text is too long ({len(text)} chars; "
+                f"max {MARKDOWN_MAX_CHARS})"
+            )
 
 
 def hash_key(raw_key: str) -> str:
@@ -76,6 +89,10 @@ def _loads(raw: Any) -> Any:
         return json.loads(raw)
     except (TypeError, ValueError):
         return {}
+
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "Z"
 
 
 class Store:
@@ -126,6 +143,87 @@ class Store:
             con.execute(
                 "ALTER TABLE tweaks ADD COLUMN kind TEXT NOT NULL DEFAULT 'tweak'"
             )
+        Store._relax_charts_kind_check(con)
+        Store._relax_data_sources_kind_check(con)
+        columns = {r["name"] for r in con.execute("PRAGMA table_info(dashboards)")}
+        if "visibility" not in columns:
+            con.execute(
+                "ALTER TABLE dashboards ADD COLUMN visibility TEXT"
+                " NOT NULL DEFAULT 'public'"
+            )
+        columns = {r["name"] for r in con.execute("PRAGMA table_info(tweaks)")}
+        if "viewer_id" not in columns:
+            con.execute("ALTER TABLE tweaks ADD COLUMN viewer_id INTEGER")
+
+    @staticmethod
+    def _relax_data_sources_kind_check(con: sqlite3.Connection) -> None:
+        """Rebuild `data_sources` without its legacy kind CHECK constraint
+        (same rationale as `_relax_charts_kind_check`; enables postgres)."""
+        row = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table'"
+            " AND name = 'data_sources'"
+        ).fetchone()
+        if row is None or "CHECK" not in (row["sql"] or "").upper():
+            return
+        con.execute(
+            "CREATE TABLE data_sources_new ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " chart_id INTEGER NOT NULL UNIQUE REFERENCES charts(id) ON DELETE CASCADE,"
+            " kind TEXT NOT NULL,"
+            " spec TEXT NOT NULL DEFAULT '{}',"
+            " refresh_interval_s INTEGER NOT NULL DEFAULT 300,"
+            " last_refreshed_at TEXT,"
+            " last_status TEXT NOT NULL DEFAULT 'pending'"
+            "  CHECK (last_status IN ('pending', 'ok', 'error')),"
+            " last_error TEXT)"
+        )
+        con.execute(
+            "INSERT INTO data_sources_new (id, chart_id, kind, spec,"
+            " refresh_interval_s, last_refreshed_at, last_status, last_error)"
+            " SELECT id, chart_id, kind, spec, refresh_interval_s,"
+            " last_refreshed_at, last_status, last_error FROM data_sources"
+        )
+        con.execute("DROP TABLE data_sources")
+        con.execute("ALTER TABLE data_sources_new RENAME TO data_sources")
+
+    @staticmethod
+    def _relax_charts_kind_check(con: sqlite3.Connection) -> None:
+        """Rebuild `charts` without its legacy kind CHECK constraint.
+
+        Early schema versions restricted `kind` via CHECK; SQLite cannot
+        alter a CHECK, so new kinds (markdown) require a table rebuild on
+        databases created before then. Chart kind validation happens in
+        the application layer (add_chart/update_chart), so the constraint
+        is simply dropped. No-op when the table is already constraint-free.
+        """
+        row = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'charts'"
+        ).fetchone()
+        if row is None or "CHECK" not in (row["sql"] or "").upper():
+            return
+        con.execute(
+            "CREATE TABLE charts_new ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " dashboard_id INTEGER NOT NULL REFERENCES dashboards(id) ON DELETE CASCADE,"
+            " kind TEXT NOT NULL,"
+            " title TEXT NOT NULL DEFAULT '',"
+            " data TEXT NOT NULL DEFAULT '{}',"
+            " spec TEXT NOT NULL DEFAULT '{}',"
+            " position TEXT NOT NULL DEFAULT '{}',"
+            " created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),"
+            " updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')))"
+        )
+        con.execute(
+            "INSERT INTO charts_new (id, dashboard_id, kind, title, data, spec,"
+            " position, created_at, updated_at)"
+            " SELECT id, dashboard_id, kind, title, data, spec, position,"
+            " created_at, updated_at FROM charts"
+        )
+        con.execute("DROP TABLE charts")
+        con.execute("ALTER TABLE charts_new RENAME TO charts")
+        con.execute(
+            "CREATE INDEX IF NOT EXISTS idx_charts_dashboard ON charts(dashboard_id)"
+        )
 
     # ───────────────────────── dashboards ─────────────────────────
 
@@ -295,6 +393,118 @@ class Store:
             con.execute("DELETE FROM dashboards WHERE id = ?", (dashboard_id,))
         return self.dashboard_out(_row_to_dict(row))
 
+    # ───────────────────────── viewers & access ────────────────────
+
+    VISIBILITIES = ("public", "unlisted", "restricted")
+
+    def upsert_viewer(self, sub: str, name: str = "", email: str = "") -> dict:
+        with self.conn() as con:
+            con.execute(
+                "INSERT INTO viewers (sub, name, email) VALUES (?, ?, ?)"
+                " ON CONFLICT(sub) DO UPDATE SET name = excluded.name,"
+                " email = excluded.email",
+                (sub, name, email),
+            )
+            row = con.execute(
+                "SELECT * FROM viewers WHERE sub = ?", (sub,)
+            ).fetchone()
+        return _row_to_dict(row)
+
+    def get_viewer(self, viewer_id: int) -> dict | None:
+        with self.conn() as con:
+            row = con.execute(
+                "SELECT * FROM viewers WHERE id = ?", (viewer_id,)
+            ).fetchone()
+        return _row_to_dict(row) if row else None
+
+    def add_viewer_like(self, viewer_id: int, dashboard_id: int) -> bool:
+        """True when the like was new (dedupe for logged-in viewers)."""
+        with self.conn() as con:
+            cur = con.execute(
+                "INSERT OR IGNORE INTO viewer_likes (viewer_id, dashboard_id)"
+                " VALUES (?, ?)",
+                (viewer_id, dashboard_id),
+            )
+        return cur.rowcount > 0
+
+    def remove_viewer_like(self, viewer_id: int, dashboard_id: int) -> bool:
+        with self.conn() as con:
+            cur = con.execute(
+                "DELETE FROM viewer_likes WHERE viewer_id = ? AND dashboard_id = ?",
+                (viewer_id, dashboard_id),
+            )
+        return cur.rowcount > 0
+
+    def has_viewer_like(self, viewer_id: int, dashboard_id: int) -> bool:
+        with self.conn() as con:
+            row = con.execute(
+                "SELECT 1 FROM viewer_likes WHERE viewer_id = ? AND dashboard_id = ?",
+                (viewer_id, dashboard_id),
+            ).fetchone()
+        return row is not None
+
+    def set_dashboard_visibility(self, dashboard_id: int, visibility: str) -> dict | None:
+        if visibility not in self.VISIBILITIES:
+            raise ValueError(f"invalid visibility '{visibility}'")
+        with self.conn() as con:
+            cur = con.execute(
+                "UPDATE dashboards SET visibility = ?,"
+                " updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?",
+                (visibility, dashboard_id),
+            )
+            if cur.rowcount == 0:
+                return None
+            row = con.execute(
+                "SELECT * FROM dashboards WHERE id = ?", (dashboard_id,)
+            ).fetchone()
+        return self.dashboard_out(_row_to_dict(row))
+
+    def create_share_token(
+        self, dashboard_id: int, token: str, expires_at: str, created_by: str = ""
+    ) -> dict:
+        with self.conn() as con:
+            con.execute(
+                "INSERT INTO share_tokens (token, dashboard_id, expires_at, created_by)"
+                " VALUES (?, ?, ?, ?)",
+                (token, dashboard_id, expires_at, created_by),
+            )
+            row = con.execute(
+                "SELECT * FROM share_tokens WHERE token = ?", (token,)
+            ).fetchone()
+        return _row_to_dict(row)
+
+    def get_share_token(self, token: str) -> dict | None:
+        with self.conn() as con:
+            row = con.execute(
+                "SELECT * FROM share_tokens WHERE token = ?", (token,)
+            ).fetchone()
+        return _row_to_dict(row) if row else None
+
+    def list_share_tokens(self, dashboard_id: int) -> list[dict]:
+        with self.conn() as con:
+            rows = con.execute(
+                "SELECT * FROM share_tokens WHERE dashboard_id = ?"
+                " ORDER BY created_at DESC",
+                (dashboard_id,),
+            ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
+    def revoke_share_token(self, token: str) -> bool:
+        with self.conn() as con:
+            cur = con.execute(
+                "DELETE FROM share_tokens WHERE token = ?", (token,)
+            )
+        return cur.rowcount > 0
+
+    def share_token_valid(self, token: str, dashboard_id: int) -> bool:
+        token_row = self.get_share_token(token)
+        if token_row is None or token_row["dashboard_id"] != dashboard_id:
+            return False
+        expiry = token_row.get("expires_at")
+        if not expiry:
+            return True
+        return expiry > _now_iso()
+
     # ───────────────────────── charts ─────────────────────────
 
     def add_chart(
@@ -308,6 +518,12 @@ class Store:
     ) -> dict:
         if kind not in CHART_KINDS:
             raise ValueError(f"invalid chart kind '{kind}'")
+        if data not in (None, {}):
+            validate_chart_data(kind, data)
+        elif kind == "markdown":
+            # markdown's content is the chart itself — an empty block is
+            # meaningless (other kinds may start empty and be filled later)
+            validate_chart_data(kind, {})
         with self.conn() as con:
             exists = con.execute(
                 "SELECT 1 FROM dashboards WHERE id = ?", (dashboard_id,)
@@ -358,6 +574,17 @@ class Store:
                 raise ValueError(f"invalid chart kind '{kind}'")
             sets.append("kind = ?")
             args.append(kind)
+        if data is not None:
+            with self.conn() as con:
+                row = con.execute(
+                    "SELECT kind FROM charts WHERE id = ?", (chart_id,)
+                ).fetchone()
+            effective_kind = kind or (row["kind"] if row else None)
+            if effective_kind is not None:
+                if data == {} and effective_kind != "markdown":
+                    pass  # empty envelope allowed for non-markdown kinds
+                else:
+                    validate_chart_data(effective_kind, data)
         for column, value in (("title", title), ("data", data), ("spec", spec), ("position", position)):
             if value is not None:
                 sets.append(f"{column} = ?")
@@ -417,7 +644,14 @@ class Store:
             raise ValueError(f"invalid data source kind '{kind}'")
         if refresh_interval_s < 30:
             raise ValueError("refresh_interval_s must be at least 30")
-        if not isinstance(spec, dict) or not spec.get("url"):
+        if not isinstance(spec, dict):
+            raise ValueError("data source spec must be a JSON object")
+        if kind == "postgres":
+            if not spec.get("source") or not spec.get("sql"):
+                raise ValueError(
+                    "postgres spec needs 'source' (registered DSN name) and 'sql'"
+                )
+        elif not spec.get("url"):
             raise ValueError("data source spec needs a 'url'")
         with self.conn() as con:
             exists = con.execute(
@@ -658,12 +892,16 @@ class Store:
 
     # ───────────────────────── tweaks ─────────────────────────
 
-    def create_tweak(self, dashboard_id: int, request: str, kind: str = "tweak") -> dict:
+    def create_tweak(
+        self, dashboard_id: int, request: str, kind: str = "tweak",
+        viewer_id: int | None = None,
+    ) -> dict:
         tweak_id = secrets.token_urlsafe(12)
         with self.conn() as con:
             con.execute(
-                "INSERT INTO tweaks (id, dashboard_id, request, kind) VALUES (?, ?, ?, ?)",
-                (tweak_id, dashboard_id, request, kind),
+                "INSERT INTO tweaks (id, dashboard_id, request, kind, viewer_id)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (tweak_id, dashboard_id, request, kind, viewer_id),
             )
             row = con.execute(
                 "SELECT * FROM tweaks WHERE id = ?", (tweak_id,)

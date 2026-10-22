@@ -134,6 +134,14 @@ class TestExport:
         line = next(c for c in body["charts"] if c["kind"] == "line")
         assert line["data"]["rows"][0] == ["Jan", 100]
 
+    async def test_markdown_kind_served(self, client, store):
+        d = store.create_dashboard("Doc", slug="doc")
+        store.add_chart(d["id"], "markdown", data={"text": "## About\nAll good"})
+        store.set_dashboard_status(d["id"], "published")
+        body = client.get("/api/dashboards/doc").json()
+        assert body["charts"][0]["kind"] == "markdown"
+        assert "About" in body["charts"][0]["data"]["text"]
+
     async def test_export_draft_404(self, client, store):
         store.create_dashboard("Secret", slug="secret")
         assert client.get("/api/dashboards/secret/export").status_code == 404
