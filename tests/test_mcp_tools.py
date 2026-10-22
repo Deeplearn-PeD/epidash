@@ -96,6 +96,28 @@ class TestDashboardWorkflow:
                 await mcp_server.get_dashboard(12345)
             with pytest.raises(ToolError, match="not found"):
                 await mcp_server.publish_dashboard(12345, confirm=True)
+            with pytest.raises(ToolError, match="not found"):
+                await mcp_server.delete_dashboard(12345, confirm=True)
+
+    async def test_delete_dashboard_removes_charts(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("Doomed", slug="doomed")
+            chart = await mcp_server.add_chart(
+                d["id"], "line",
+                data={"columns": ["w", "c"], "rows": [["2024-01", 1]]},
+            )
+            deleted = await mcp_server.delete_dashboard(d["id"], confirm=True)
+            assert deleted["id"] == d["id"]
+            assert deleted["slug"] == "doomed"
+            assert store.get_dashboard(d["id"]) is None
+            assert store.get_chart(chart["id"]) is None
+            assert store.list_charts(d["id"]) == []
+            # The deletion is audited as 'ok'.
+            audit = await mcp_server.get_audit_log()
+            row = next(r for r in audit if r["action"] == "delete_dashboard")
+            assert row["result"] == "ok"
+            assert row["target_id"] == str(d["id"])
 
 
 class TestConfirmGating:
@@ -134,6 +156,17 @@ class TestConfirmGating:
             assert store.get_chart(c["id"]) is not None
             removed = await mcp_server.remove_chart(c["id"], confirm=True)
             assert removed["id"] == c["id"]
+
+    async def test_delete_dashboard_requires_confirm(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("D", slug="d3l")
+            await mcp_server.add_chart(d["id"], "kpi", data={"value": 1})
+            with pytest.raises(ToolError, match="Refused"):
+                await mcp_server.delete_dashboard(d["id"], confirm=False)
+            assert store.get_dashboard(d["id"]) is not None
+            await mcp_server.delete_dashboard(d["id"], confirm=True)
+            assert store.get_dashboard(d["id"]) is None
 
 
 class TestChartValidation:

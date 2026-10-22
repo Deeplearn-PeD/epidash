@@ -183,6 +183,25 @@ class Store:
             ).fetchone()
         return self.dashboard_out(_row_to_dict(row))
 
+    def delete_dashboard(self, dashboard_id: int) -> dict | None:
+        """Permanently remove a dashboard and all of its charts.
+
+        Returns the deleted dashboard document, or None when the id is
+        unknown. Charts are removed explicitly (foreign keys are ON, but
+        being explicit keeps the deletion self-evident).
+        """
+        with self.conn() as con:
+            row = con.execute(
+                "SELECT * FROM dashboards WHERE id = ?", (dashboard_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            con.execute(
+                "DELETE FROM charts WHERE dashboard_id = ?", (dashboard_id,)
+            )
+            con.execute("DELETE FROM dashboards WHERE id = ?", (dashboard_id,))
+        return self.dashboard_out(_row_to_dict(row))
+
     # ───────────────────────── charts ─────────────────────────
 
     def add_chart(

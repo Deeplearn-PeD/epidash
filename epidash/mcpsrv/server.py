@@ -311,6 +311,21 @@ async def unpublish_dashboard(dashboard_id: int, confirm: bool = False) -> dict:
     return dashboard
 
 
+@mcp.tool()
+@_audited("delete_dashboard", target_type="dashboard", target_id_arg="dashboard_id")
+async def delete_dashboard(dashboard_id: int, confirm: bool = False) -> dict:
+    """Permanently delete a dashboard and all of its charts. Re-run with
+    confirm=true to proceed."""
+    _require_confirm(
+        confirm, f"delete_dashboard({dashboard_id})",
+        "deletes this dashboard and all its charts (cannot be undone)",
+    )
+    dashboard = _get_store().delete_dashboard(dashboard_id)
+    if dashboard is None:
+        raise ToolError(f"dashboard {dashboard_id} not found")
+    return dashboard
+
+
 # ── mutating tools: charts ───────────────────────────────────────────────
 
 
