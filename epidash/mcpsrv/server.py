@@ -240,16 +240,19 @@ async def create_dashboard(
     description: str = "",
     slug: Optional[str] = None,
     layout: Optional[dict] = None,
+    author: Optional[str] = None,
 ) -> dict:
     """Create a dashboard in draft status. Returns its id and public slug.
     slug: optional URL-safe identifier (random when omitted). layout:
-    free-form options dict (e.g. {"theme": "dark"}). The control key's
-    name is recorded as the dashboard's creator."""
+    free-form options dict (e.g. {"theme": "dark"}). author: display name
+    of the person who requested the dashboard — pass the requesting
+    user's name/handle when known (shown publicly as the creator);
+    defaults to the control key's name."""
     try:
         try:
-            creator = get_current_key().get("name", "")
+            creator = author or get_current_key().get("name", "")
         except RuntimeError:
-            creator = ""
+            creator = author or ""
         return _get_store().create_dashboard(
             title=title, description=description, slug=slug, layout=layout,
             created_by=creator,
@@ -265,11 +268,14 @@ async def update_dashboard(
     title: Optional[str] = None,
     description: Optional[str] = None,
     layout: Optional[dict] = None,
+    author: Optional[str] = None,
 ) -> dict:
     """Update a dashboard's title/description/layout (only provided fields
-    change)."""
+    change). author: replace the public creator name (e.g. to correct a
+    dashboard attributed to a shared key)."""
     dashboard = _get_store().update_dashboard(
-        dashboard_id, title=title, description=description, layout=layout
+        dashboard_id, title=title, description=description, layout=layout,
+        created_by=author,
     )
     if dashboard is None:
         raise ToolError(f"dashboard {dashboard_id} not found")

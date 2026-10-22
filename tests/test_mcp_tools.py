@@ -68,6 +68,21 @@ class TestDashboardWorkflow:
             d = await mcp_server.create_dashboard("Dengue RJ")
         assert d["created_by"] == "tests"
 
+    async def test_create_author_overrides_key_name(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("Dengue RJ", author="fccoelho")
+        assert d["created_by"] == "fccoelho"
+
+    async def test_update_dashboard_can_correct_author(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("Dengue RJ")
+            assert d["created_by"] == "tests"
+            updated = await mcp_server.update_dashboard(d["id"], author="fccoelho")
+        assert updated["created_by"] == "fccoelho"
+        assert store.get_dashboard(d["id"])["created_by"] == "fccoelho"
+
     async def test_list_dashboards_and_audit_log(self, env):
         store, _ = env
         async with keyed_context(store):

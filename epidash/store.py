@@ -142,6 +142,7 @@ class Store:
         title: str | None = None,
         description: str | None = None,
         layout: dict | None = None,
+        created_by: str | None = None,
     ) -> dict | None:
         sets, args = ["updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"], []
         if title is not None:
@@ -153,6 +154,9 @@ class Store:
         if layout is not None:
             sets.append("layout = ?")
             args.append(json.dumps(layout))
+        if created_by is not None:
+            sets.append("created_by = ?")
+            args.append(created_by)
         args.append(dashboard_id)
         with self.conn() as con:
             cur = con.execute(
