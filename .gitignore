@@ -21,3 +21,5 @@ data/
 # Secrets
 .env
 .env.local
+.coverage
+coverage.xml

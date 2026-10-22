@@ -1,6 +1,7 @@
 # EpiDash
 
 [![CI](https://github.com/Deeplearn-PeD/epidash/actions/workflows/ci.yml/badge.svg)](https://github.com/Deeplearn-PeD/epidash/actions/workflows/ci.yml)
+[![Codecov](https://codecov.io/gh/Deeplearn-PeD/epidash/graph/badge.svg)](https://codecov.io/gh/Deeplearn-PeD/epidash)
 [![PyPI](https://img.shields.io/pypi/v/epidash)](https://pypi.org/project/epidash/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -11,6 +12,8 @@ A light, MCP-controlled dashboard service. [EpidBot](https://github.com/Deeplear
 unpublishes dashboards through an MCP tool surface; anyone with a dashboard
 link views it in a minimal web UI. Viewers can ask EpidBot to tweak a
 dashboard from the browser.
+
+**Live instance: [https://dash.kwar-ai.com.br](https://dash.kwar-ai.com.br)**
 
 ```
 EpidBot agent ──(MCP client, dk_ key)──▶ EpiDash /mcp (FastMCP tools)
