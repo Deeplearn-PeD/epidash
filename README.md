@@ -5,7 +5,6 @@
 [![PyPI](https://img.shields.io/pypi/v/epidash)](https://pypi.org/project/epidash/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Managed with uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v1.json)](https://docs.astral.sh/uv/)
 
 A light, MCP-controlled dashboard service. [EpidBot](https://github.com/Deeplearn-PeD/EpiDBot)
 (and any MCP client holding a control key) builds, updates, publishes and
