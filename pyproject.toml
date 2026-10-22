@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "epidash"
-version = "0.3.0"
+version = "0.4.0"
 description = "EpiDash — light MCP-controlled dashboard service: EpidBot publishes and controls dashboards via MCP"
 readme = "README.md"
 requires-python = ">=3.12"

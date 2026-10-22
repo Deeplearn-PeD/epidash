@@ -76,6 +76,10 @@ In an MCP client (e.g. Claude Desktop, Cursor, EpidBot):
 | `EPIDASH_TWEAK_RATE_LIMIT_PER_HOUR` | `20` | Per-dashboard viewer tweak budget |
 | `EPIDASH_ASK_RATE_LIMIT_PER_HOUR` | `30` | Per-dashboard viewer question budget |
 | `EPIDASH_TWEAK_TIMEOUT_S` | `300` | Max wait for an EpidBot tweak turn |
+| `EPIDASH_OIDC_ISSUER` | — | Keycloak issuer URL (enables viewer login) |
+| `EPIDASH_OIDC_CLIENT_ID` / `_SECRET` | — | OIDC confidential client for EpiDash |
+| `EPIDASH_SESSION_SECRET` | — | Long random string; signs viewer session cookies |
+| `EPIDASH_PG_DSN_<NAME>` | — | Named Postgres DSN for `postgres` data sources |
 
 ## MCP tools
 
@@ -85,18 +89,21 @@ Read-only: `list_dashboards`, `get_dashboard`, `get_view_stats`, `get_audit_log`
 Mutations (audited): `create_dashboard`, `update_dashboard`,
 `publish_dashboard` (confirm), `unpublish_dashboard` (confirm),
 `delete_dashboard` (confirm), `add_chart`, `update_chart`, `remove_chart`
-(confirm), `duplicate_dashboard`, `style_charts`.
+(confirm), `duplicate_dashboard`, `style_charts`,
+`set_dashboard_access` (confirm), `create_share_token` (confirm),
+`list_share_tokens`, `revoke_share_token` (confirm).
 
 ### Live data sources
 
-Charts can auto-update from a remote URL instead of holding a static
-snapshot. `attach_data_source(chart_id, kind, url, refresh_interval_s=300,
-path=None)` attaches a source:
+Charts can auto-update from remote data instead of holding a static
+snapshot. `attach_data_source(chart_id, kind, ..., refresh_interval_s=300)`
+attaches a source:
 
 | kind | payload |
 |---|---|
-| `url_json` | the chart's data envelope itself (`{"columns": ..., "rows": ...}`); `path` optionally extracts a nested object (dotted keys, e.g. `"result.week"`) |
-| `url_csv` | header row + data rows (numeric cells auto-converted); feeds `line`/`bar`/`pie`/`table` charts |
+| `url_json` | `url` (+ optional dotted `path`) — the payload is the chart's data envelope itself (`{"columns": ..., "rows": ...}`) |
+| `url_csv` | `url` — header row + data rows (numeric cells auto-converted); feeds `line`/`bar`/`pie`/`table` charts |
+| `postgres` | `source` (a registered DSN name) + `sql` — query result columns/rows become the envelope; DSNs live in `EPIDASH_PG_DSN_<NAME>` env vars, never in the database |
 
 A background refresher fetches due sources every 30s (minimum interval 30s)
 and replaces the chart's data on success — viewers pick the change up on
@@ -112,9 +119,29 @@ stop with `remove_data_source` (confirm).
 | `line`, `bar`, `pie`, `table` | `{"columns": ["month", "cases"], "rows": [["Jan", 120], ...]}` |
 | `kpi` | `{"value": 1234, "label": "Cases", "unit": "", "delta": "+12%"}` |
 | `choropleth` | `{"values": {"SP": 120, "RJ": 90}, "region_level": "uf", "label": "cases"}` |
+| `markdown` | `{"text": "## Notes\nNarrative **between** charts"}` — rendered as a narrative block |
 
 `spec` accepts style overrides (`{"color": "#4ade80"}`, `{"y_label": "cases"}`) and
 `position` controls ordering/width (`{"order": 1, "width": "half"}`).
+
+## Viewer login & access control
+
+Optionally, viewers can sign in through Keycloak (OIDC). Configure
+`EPIDASH_OIDC_ISSUER`, `EPIDASH_OIDC_CLIENT_ID`, `EPIDASH_OIDC_CLIENT_SECRET`
+and `EPIDASH_SESSION_SECRET` to enable it — without them, EpiDash stays
+fully anonymous.
+
+With login enabled:
+
+- logged-in viewers get **server-side like dedupe** and their questions are
+  attributed (`[Asked by name]` reaches EpidBot with the question);
+- dashboards gain a **visibility** level, set via the
+  `set_dashboard_access` MCP tool: `public` (gallery + link), `unlisted`
+  (link only), `restricted` (logged-in viewers or share tokens);
+- `create_share_token` mints expiring links (`https://…/?t=st_…#/d/slug`)
+  that work even for restricted dashboards; `revoke_share_token` kills them.
+
+The UI is available in English and pt-BR (`?lang=pt-BR`, persisted).
 
 ## Viewer tweak flow
 
