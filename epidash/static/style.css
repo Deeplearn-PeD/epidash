@@ -270,6 +270,21 @@ main { max-width: 1280px; margin: 0 auto; padding: 28px 24px 80px; }
 .src-badge.src-error { color: var(--danger); border-color: var(--danger); }
 .plot { width: 100%; }
 
+/* Plotly chart containers keep a predictable aspect ratio (JS adds
+ * these classes; KPI/table/markdown cards keep natural height).
+ * max-height keeps full-width cards from becoming towers; Plotly's
+ * responsive config re-fits the plot when the box resizes. */
+.plot-aspect {
+  aspect-ratio: 16 / 9;
+  min-height: 280px;
+  max-height: 500px;
+}
+.plot-aspect-geo {
+  aspect-ratio: 4 / 3;
+  min-height: 320px;
+  max-height: 560px;
+}
+
 /* KPI cards */
 .kpi-row { display: flex; align-items: baseline; gap: 10px; }
 .kpi-value { font-size: 40px; font-weight: 700; color: var(--accent); line-height: 1.1; }

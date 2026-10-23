@@ -560,8 +560,14 @@ function renderChart(el, chart) {
   const { kind, data, spec = {} } = chart;
   if (kind === "kpi") return renderKpi(el, data, spec);
   if (kind === "table") return renderTable(el, data, spec);
-  if (kind === "choropleth") return renderChoropleth(el, data, spec);
+  if (kind === "choropleth") {
+    el.classList.add("plot-aspect", "plot-aspect-geo");
+    return renderChoropleth(el, data, spec);
+  }
   if (kind === "markdown") return renderMarkdown(el, data);
+  // line/bar/pie go through Plotly: keep a pleasant, predictable
+  // aspect ratio instead of stretching to the card width
+  el.classList.add("plot-aspect");
   el.innerHTML = `<p class="empty">${t("loading_chart")}</p>`;
   ensurePlotly()
     .then(() => renderPlotlyChart(el, kind, data, spec))
