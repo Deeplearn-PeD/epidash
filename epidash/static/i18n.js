@@ -41,6 +41,10 @@ const I18N = {
     sign_out: "Sign out",
     login_required: "This dashboard requires login to view.",
     login_cta: "Sign in to view",
+    footer_rights: "All rights reserved.",
+    footer_github: "GitHub",
+    footer_epidbot: "EpidBot",
+    footer_live: "Live app",
   },
   "pt-BR": {
     home_title: "Painéis publicados",
@@ -82,6 +86,10 @@ const I18N = {
     sign_out: "Sair",
     login_required: "Este painel requer login para ser visualizado.",
     login_cta: "Entrar para visualizar",
+    footer_rights: "Todos os direitos reservados.",
+    footer_github: "GitHub",
+    footer_epidbot: "EpidBot",
+    footer_live: "Aplicação",
   },
 };
 

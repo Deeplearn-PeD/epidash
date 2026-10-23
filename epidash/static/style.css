@@ -56,6 +56,28 @@ body {
 
 main { max-width: 1280px; margin: 0 auto; padding: 28px 24px 80px; }
 
+/* ── footer ───────────────────────────────────────── */
+.site-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 18px 24px 28px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+.site-footer a { color: var(--muted); text-decoration: none; }
+.site-footer a:hover { color: var(--accent); }
+.footer-links { display: flex; gap: 18px; }
+
+@media print {
+  .site-footer { display: none !important; }
+}
+
 /* ── home ─────────────────────────────────────────── */
 .home h1 { font-size: 22px; margin: 8px 0 20px; }
 .home-head {
