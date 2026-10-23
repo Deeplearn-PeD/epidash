@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from epidash.config import get_settings
+from epidash.epidbot_client import epidbot_user_exists
 from epidash.logging import get_logger
 from epidash.store import Store
 
@@ -218,6 +219,19 @@ async def callback(request: Request, code: str = "", state: str = ""):
     sub = claims.get("sub", "")
     if not sub:
         raise HTTPException(status_code=502, detail="Token missing subject")
+    email = claims.get("email", "")
+    # Only existing EpidBot accounts may sign in. The probe fails closed:
+    # without EpidBot's confirmation no session is issued.
+    if get_settings().epidbot_user_validation and not await epidbot_user_exists(
+        sub, email
+    ):
+        logger.info(
+            "Login rejected: no EpidBot account for sub=%s email=%s",
+            sub, email or "(none)",
+        )
+        raise HTTPException(
+            status_code=403, detail="Only EpidBot users can sign in"
+        )
     viewer = get_store().upsert_viewer(
         sub=sub,
         name=claims.get("preferred_username") or claims.get("name") or "",

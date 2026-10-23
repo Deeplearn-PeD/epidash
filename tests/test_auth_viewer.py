@@ -2,6 +2,7 @@
 
 import pytest
 
+from epidash import routes_auth
 from epidash.config import Settings, set_settings
 from epidash.main import create_app
 from epidash.routes_auth import (
@@ -186,6 +187,112 @@ class TestAuthEndpoints:
             follow_redirects=False,
         )
         assert res.status_code == 400
+
+
+class TestCallbackEpidbotGate:
+    """OIDC callback only issues sessions to existing EpidBot users."""
+
+    @pytest.fixture()
+    def gate_settings(self, settings):
+        s = Settings(
+            db_path=settings.db_path,
+            base_url=settings.base_url,
+            dns_rebinding_protection=False,
+            epidbot_base_url="https://epidbot.test",
+            epidbot_internal_secret="shared",
+            oidc_issuer="https://auth.test/realms/epidbot",
+            oidc_client_id="epidash",
+            oidc_client_secret="client-secret",
+            session_secret=TEST_SECRET,
+        )
+        set_settings(s)
+        yield s
+        set_settings(None)
+
+    @pytest.fixture()
+    def gate_client(self, gate_settings, store):
+        app = create_app(store, run_mcp_lifespan=False)
+        with TestClient(app) as c:
+            yield c
+
+    @pytest.fixture()
+    def mock_oidc(self, monkeypatch):
+        async def fake_exchange(code):
+            return {
+                "sub": "kc-sub-1",
+                "email": "f@x.test",
+                "preferred_username": "fccoelho",
+            }
+
+        monkeypatch.setattr(routes_auth, "exchange_code", fake_exchange)
+
+    def _callback(self, client):
+        client.cookies.set("epidash_oauth_state", "st123")
+        return client.get(
+            "/auth/callback",
+            params={"code": "c", "state": "st123"},
+            follow_redirects=False,
+        )
+
+    def test_validation_on_when_oidc_and_epidbot_configured(
+        self, gate_settings
+    ):
+        assert gate_settings.epidbot_user_validation is True
+
+    def test_validation_off_when_flag_disabled(self, gate_settings):
+        gate_settings.require_epidbot_user = False
+        assert gate_settings.epidbot_user_validation is False
+
+    def test_validation_off_without_epidbot(self, oidc_settings):
+        assert oidc_settings.epidbot_user_validation is False
+
+    def test_epidbot_user_gets_session(
+        self, gate_client, gate_settings, store, mock_oidc, monkeypatch
+    ):
+        async def probe(sub, email):
+            return True
+
+        monkeypatch.setattr(routes_auth, "epidbot_user_exists", probe)
+        res = self._callback(gate_client)
+        assert res.status_code == 307
+        viewer = store.get_viewer_by_sub("kc-sub-1")
+        assert viewer is not None and viewer["email"] == "f@x.test"
+
+    def test_non_epidbot_user_rejected(
+        self, gate_client, store, mock_oidc, monkeypatch
+    ):
+        async def probe(sub, email):
+            return False
+
+        monkeypatch.setattr(routes_auth, "epidbot_user_exists", probe)
+        res = self._callback(gate_client)
+        assert res.status_code == 403
+        assert "Only EpidBot users" in res.json()["detail"]
+        assert store.get_viewer_by_sub("kc-sub-1") is None
+
+    def test_epidbot_outage_fails_closed(
+        self, gate_client, store, mock_oidc, monkeypatch
+    ):
+        async def probe(sub, email):
+            return False
+
+        monkeypatch.setattr(routes_auth, "epidbot_user_exists", probe)
+        assert self._callback(gate_client).status_code == 403
+
+    def test_gate_skipped_when_epidbot_unconfigured(
+        self, oidc_client, store, mock_oidc, monkeypatch
+    ):
+        async def unexpected(sub, email):
+            raise AssertionError("probe must not run without EpidBot")
+
+        monkeypatch.setattr(routes_auth, "epidbot_user_exists", unexpected)
+        oidc_client.cookies.set("epidash_oauth_state", "st123")
+        res = oidc_client.get(
+            "/auth/callback",
+            params={"code": "c", "state": "st123"},
+            follow_redirects=False,
+        )
+        assert res.status_code == 307
 
 
 class TestTweakAttribution:

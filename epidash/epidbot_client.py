@@ -157,3 +157,32 @@ class EpidBotClient:
             logger.info("EpiDash tweak submitted to EpidBot (job_id=%s)", job_id)
             result = await self._poll(client, job_id)
         return result
+
+
+async def epidbot_user_exists(sub: str, email: str) -> bool:
+    """True when EpidBot reports an account for this identity.
+
+    Used by the OIDC login flow to restrict sign-in to existing EpidBot
+    users (GET /api/v1/auth/internal/user-exists, same internal-service
+    credentials as the tweak flow). Fails closed: any transport error,
+    non-200 response, or missing report counts as "not a user".
+    """
+    client = EpidBotClient()
+    try:
+        async with httpx.AsyncClient() as http:
+            response = await http.get(
+                f"{client.base_url}/api/v1/auth/internal/user-exists",
+                params={"sub": sub, "email": email},
+                headers=client._headers(),
+                timeout=10,
+            )
+    except httpx.HTTPError as e:
+        logger.warning("EpidBot user probe failed: %s", e)
+        return False
+    if response.status_code != 200:
+        logger.warning(
+            "EpidBot user probe failed: HTTP %s: %s",
+            response.status_code, response.text[:200],
+        )
+        return False
+    return bool(response.json().get("exists"))

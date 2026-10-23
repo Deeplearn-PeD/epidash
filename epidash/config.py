@@ -77,6 +77,15 @@ class Settings:
         default_factory=lambda: _env_str("EPIDBOT_INTERNAL_SECRET")
     )
 
+    #: Restrict viewer sign-in to existing EpidBot accounts: the OIDC
+    #: callback probes EpidBot's internal user-exists endpoint before a
+    #: session is issued. Applies whenever OIDC login and EpidBot are
+    #: both configured; set to false to skip the probe. EpidBot being
+    #: unreachable then blocks logins (fail closed).
+    require_epidbot_user: bool = field(
+        default_factory=lambda: _env_bool("EPIDASH_REQUIRE_EPIDBOT_USER", True)
+    )
+
     #: Tweak submissions allowed per dashboard slug per hour (LLM cost guard).
     tweak_rate_limit_per_hour: int = field(
         default_factory=lambda: _env_int("EPIDASH_TWEAK_RATE_LIMIT_PER_HOUR", 20)
@@ -125,6 +134,15 @@ class Settings:
     def epidbot_configured(self) -> bool:
         """True when the tweak flow can reach EpidBot."""
         return bool(self.epidbot_base_url) and bool(self.epidbot_internal_secret)
+
+    @property
+    def epidbot_user_validation(self) -> bool:
+        """True when login must verify viewers against EpidBot."""
+        return (
+            self.require_epidbot_user
+            and self.oidc_configured
+            and self.epidbot_configured
+        )
 
     @property
     def pg_sources(self) -> dict[str, str]:

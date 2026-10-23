@@ -79,6 +79,7 @@ In an MCP client (e.g. Claude Desktop, Cursor, EpidBot):
 | `EPIDASH_OIDC_ISSUER` | — | Keycloak issuer URL (enables viewer login) |
 | `EPIDASH_OIDC_CLIENT_ID` / `_SECRET` | — | OIDC confidential client for EpiDash |
 | `EPIDASH_SESSION_SECRET` | — | Long random string; signs viewer session cookies |
+| `EPIDASH_REQUIRE_EPIDBOT_USER` | `true` | Only EpidBot accounts can sign in (probed at login; fail closed) |
 | `EPIDASH_PG_DSN_<NAME>` | — | Named Postgres DSN for `postgres` data sources |
 
 ## MCP tools
@@ -135,6 +136,10 @@ With login enabled:
 
 - logged-in viewers get **server-side like dedupe** and their questions are
   attributed (`[Asked by name]` reaches EpidBot with the question);
+- when EpidBot is configured (default `EPIDASH_REQUIRE_EPIDBOT_USER=true`),
+  signing in additionally requires an **existing EpidBot account** — the
+  callback probes EpidBot's internal user-exists endpoint (Keycloak identity
+  or email match) and fails closed if EpidBot cannot confirm membership;
 - dashboards gain a **visibility** level, set via the
   `set_dashboard_access` MCP tool: `public` (gallery + link), `unlisted`
   (link only), `restricted` (logged-in viewers or share tokens);

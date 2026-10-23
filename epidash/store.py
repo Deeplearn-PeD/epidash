@@ -417,6 +417,13 @@ class Store:
             ).fetchone()
         return _row_to_dict(row) if row else None
 
+    def get_viewer_by_sub(self, sub: str) -> dict | None:
+        with self.conn() as con:
+            row = con.execute(
+                "SELECT * FROM viewers WHERE sub = ?", (sub,)
+            ).fetchone()
+        return _row_to_dict(row) if row else None
+
     def add_viewer_like(self, viewer_id: int, dashboard_id: int) -> bool:
         """True when the like was new (dedupe for logged-in viewers)."""
         with self.conn() as con:
