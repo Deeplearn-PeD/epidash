@@ -73,6 +73,11 @@ main { max-width: 1280px; margin: 0 auto; padding: 28px 24px 80px; }
 .site-footer a { color: var(--muted); text-decoration: none; }
 .site-footer a:hover { color: var(--accent); }
 .footer-links { display: flex; gap: 18px; }
+.footer-sovereignty { text-align: center; }
+
+@media (max-width: 720px) {
+  .site-footer { flex-direction: column; }
+}
 
 @media print {
   .site-footer { display: none !important; }
