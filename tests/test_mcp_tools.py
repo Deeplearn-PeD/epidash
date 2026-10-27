@@ -83,6 +83,15 @@ class TestDashboardWorkflow:
         assert updated["created_by"] == "fccoelho"
         assert store.get_dashboard(d["id"])["created_by"] == "fccoelho"
 
+    async def test_create_and_update_language(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("Casos de dengue", language="pt-BR")
+            assert d["language"] == "pt-BR"
+            updated = await mcp_server.update_dashboard(d["id"], language="en")
+        assert updated["language"] == "en"
+        assert store.get_dashboard(d["id"])["language"] == "en"
+
     async def test_list_dashboards_and_audit_log(self, env):
         store, _ = env
         async with keyed_context(store):

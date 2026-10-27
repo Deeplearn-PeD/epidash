@@ -90,6 +90,53 @@ async function route() {
 
 window.addEventListener("hashchange", route);
 
+// ───────────────────────── card metadata helpers ───────────────────
+
+// Flag emoji for a stored dashboard language ("" when unknown).
+function flagFor(lang) {
+  const l = String(lang || "").toLowerCase();
+  if (l.startsWith("pt")) return "🇧🇷";
+  if (l.startsWith("en")) return "🇬🇧";
+  return "";
+}
+
+// Unambiguous function/content words per language, for guessing the
+// language of dashboards created before `language` was tracked.
+const LANG_HINTS = {
+  "pt-BR": new Set([
+    "de", "da", "do", "das", "dos", "em", "no", "na", "nas", "nos",
+    "com", "por", "para", "uma", "um", "que", "casos", "óbitos",
+    "mortalidade", "semana", "saúde", "notificações", "vigilância",
+    "febre", "brasileira", "brasileiro", "brasil",
+  ]),
+  en: new Set([
+    "of", "the", "and", "for", "with", "cases", "deaths", "mortality",
+    "week", "weekly", "health", "surveillance", "report", "fever",
+    "brazil",
+  ]),
+};
+
+function guessLanguage(text) {
+  const words = String(text).toLowerCase().split(/[^\p{L}]+/u).filter(Boolean);
+  let pt = 0, en = 0;
+  for (const w of words) {
+    if (LANG_HINTS["pt-BR"].has(w)) pt += 1;
+    if (LANG_HINTS.en.has(w)) en += 1;
+  }
+  if (pt > en) return "pt-BR";
+  if (en > pt) return "en";
+  return "";
+}
+
+function formatDateTime(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString(CURRENT_LANG, {
+    day: "2-digit", month: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
 // ───────────────────────────── home ────────────────────────────────
 
 async function showHome() {
@@ -129,10 +176,19 @@ async function showHome() {
       const a = document.createElement("a");
       a.className = "dash-card";
       a.href = `#/d/${d.slug}`;
-      const by = d.created_by ? `<span class="dash-card-by">${t("by")} ${esc(d.created_by)}</span>` : "<span></span>";
+      const lang = d.language || guessLanguage(`${d.title} ${d.description || ""}`);
+      const flag = flagFor(lang);
+      const flagHtml = flag
+        ? `<span class="dash-card-flag" title="${esc(lang)}" lang="${esc(lang)}">${flag}</span>`
+        : "";
+      const by = d.created_by
+        ? `<span class="dash-card-by">${t("by")} ${esc(d.created_by)}</span>` : "";
+      const when = d.created_at
+        ? `<time class="dash-card-date" datetime="${esc(d.created_at)}" title="${t("created_at")}">${esc(formatDateTime(d.created_at))}</time>` : "";
+      const left = [by, when].filter(Boolean).join('<span class="dash-card-sep">·</span>');
       a.innerHTML =
-        `<h3>${esc(d.title)}</h3><p>${esc(d.description || "")}</p>` +
-        `<p class="dash-card-meta">${by}<span>♥ ${d.likes ?? 0}</span></p>`;
+        `<h3>${flagHtml}${esc(d.title)}</h3><p>${esc(d.description || "")}</p>` +
+        `<p class="dash-card-meta"><span class="dash-card-left">${left}</span><span>♥ ${d.likes ?? 0}</span></p>`;
       list.appendChild(a);
     }
   };

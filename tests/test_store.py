@@ -34,6 +34,16 @@ class TestDashboards:
         assert out["description"] == ""
         assert store.update_dashboard(999, title="X") is None
 
+    def test_language_round_trip(self, store):
+        d = store.create_dashboard("Casos de dengue", language="pt-BR")
+        assert d["language"] == "pt-BR"
+        # dashboards created without one default to unknown
+        assert store.create_dashboard("Weekly cases")["language"] == ""
+        out = store.update_dashboard(d["id"], language="en")
+        assert out["language"] == "en"
+        # updating unrelated fields leaves the language untouched
+        assert store.update_dashboard(d["id"], title="T2")["language"] == "en"
+
     def test_status_filter(self, store):
         pub = store.create_dashboard("Pub", slug="pub")
         store.create_dashboard("Draft", slug="draft")

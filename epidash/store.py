@@ -154,6 +154,11 @@ class Store:
         columns = {r["name"] for r in con.execute("PRAGMA table_info(tweaks)")}
         if "viewer_id" not in columns:
             con.execute("ALTER TABLE tweaks ADD COLUMN viewer_id INTEGER")
+        columns = {r["name"] for r in con.execute("PRAGMA table_info(dashboards)")}
+        if "language" not in columns:
+            con.execute(
+                "ALTER TABLE dashboards ADD COLUMN language TEXT NOT NULL DEFAULT ''"
+            )
 
     @staticmethod
     def _relax_data_sources_kind_check(con: sqlite3.Connection) -> None:
@@ -234,14 +239,16 @@ class Store:
         slug: str | None = None,
         layout: dict | None = None,
         created_by: str = "",
+        language: str = "",
     ) -> dict:
         slug = slug or secrets.token_urlsafe(9)
         with self.conn() as con:
             try:
                 cur = con.execute(
-                    "INSERT INTO dashboards (slug, title, description, layout, created_by)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (slug, title, description, json.dumps(layout or {}), created_by),
+                    "INSERT INTO dashboards (slug, title, description, layout,"
+                    " created_by, language) VALUES (?, ?, ?, ?, ?, ?)",
+                    (slug, title, description, json.dumps(layout or {}),
+                     created_by, language),
                 )
             except sqlite3.IntegrityError as e:
                 raise ValueError(f"slug '{slug}' already exists") from e
@@ -280,6 +287,7 @@ class Store:
         description: str | None = None,
         layout: dict | None = None,
         created_by: str | None = None,
+        language: str | None = None,
     ) -> dict | None:
         sets, args = ["updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"], []
         if title is not None:
@@ -294,6 +302,9 @@ class Store:
         if created_by is not None:
             sets.append("created_by = ?")
             args.append(created_by)
+        if language is not None:
+            sets.append("language = ?")
+            args.append(language)
         args.append(dashboard_id)
         with self.conn() as con:
             cur = con.execute(

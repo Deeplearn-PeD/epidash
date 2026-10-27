@@ -115,7 +115,9 @@ def _public_dashboard(dashboard: dict) -> dict:
         "title": dashboard["title"],
         "description": dashboard["description"],
         "created_by": dashboard["created_by"],
+        "language": dashboard.get("language", ""),
         "layout": dashboard["layout"],
+        "created_at": dashboard["created_at"],
         "updated_at": dashboard["updated_at"],
         "published_at": dashboard["published_at"],
     }
@@ -132,7 +134,9 @@ async def list_published_dashboards(request: Request) -> list[dict]:
             "title": d["title"],
             "description": d["description"],
             "created_by": d["created_by"],
+            "language": d.get("language", ""),
             "likes": store.get_likes(d["id"]),
+            "created_at": d["created_at"],
             "updated_at": d["updated_at"],
         }
         for d in store.list_dashboards(include_unpublished=False)
@@ -214,6 +218,7 @@ async def export_dashboard(slug: str, request: Request) -> JSONResponse:
         "title": dashboard["title"],
         "description": dashboard["description"],
         "created_by": dashboard["created_by"],
+        "language": dashboard.get("language", ""),
         "layout": dashboard["layout"],
         "published_at": dashboard["published_at"],
         "updated_at": dashboard["updated_at"],

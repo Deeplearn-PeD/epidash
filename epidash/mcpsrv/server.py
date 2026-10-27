@@ -221,13 +221,16 @@ async def create_dashboard(
     slug: Optional[str] = None,
     layout: Optional[dict] = None,
     author: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> dict:
     """Create a dashboard in draft status. Returns its id and public slug.
     slug: optional URL-safe identifier (random when omitted). layout:
     free-form options dict (e.g. {"theme": "dark"}). author: display name
     of the person who requested the dashboard — pass the requesting
     user's name/handle when known (shown publicly as the creator);
-    defaults to the control key's name."""
+    defaults to the control key's name. language: language the dashboard
+    content is written in (e.g. "pt-BR", "en") — shown as a flag in the
+    gallery."""
     try:
         try:
             creator = author or get_current_key().get("name", "")
@@ -235,7 +238,7 @@ async def create_dashboard(
             creator = author or ""
         return _get_store().create_dashboard(
             title=title, description=description, slug=slug, layout=layout,
-            created_by=creator,
+            created_by=creator, language=language or "",
         )
     except ValueError as e:
         raise ToolError(str(e)) from e
@@ -249,13 +252,16 @@ async def update_dashboard(
     description: Optional[str] = None,
     layout: Optional[dict] = None,
     author: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> dict:
     """Update a dashboard's title/description/layout (only provided fields
     change). author: replace the public creator name (e.g. to correct a
-    dashboard attributed to a shared key)."""
+    dashboard attributed to a shared key). language: language the dashboard
+    content is written in (e.g. "pt-BR", "en") — shown as a flag in the
+    gallery."""
     dashboard = _get_store().update_dashboard(
         dashboard_id, title=title, description=description, layout=layout,
-        created_by=author,
+        created_by=author, language=language,
     )
     if dashboard is None:
         raise ToolError(f"dashboard {dashboard_id} not found")

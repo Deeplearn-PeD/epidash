@@ -76,6 +76,22 @@ class TestPublishedDashboardExposure:
         store.set_dashboard_status(published["id"], "draft")
         assert client.get("/api/dashboards/dengue").status_code == 404
 
+    async def test_listing_and_detail_expose_created_at_and_language(self, client, store):
+        d = store.create_dashboard(
+            "Casos de dengue", description="notificações semanais",
+            slug="lang", language="pt-BR",
+        )
+        store.set_dashboard_status(d["id"], "published")
+        listing = client.get("/api/dashboards").json()[0]
+        assert listing["language"] == "pt-BR"
+        assert listing["created_at"]
+        detail = client.get("/api/dashboards/lang").json()
+        assert detail["language"] == "pt-BR"
+        assert detail["created_at"] == listing["created_at"]
+
+    async def test_language_defaults_to_empty_when_not_set(self, client, published):
+        assert client.get("/api/dashboards").json()[0]["language"] == ""
+
 
 class TestLikes:
     """Viewer like/unlike with persistent counts."""

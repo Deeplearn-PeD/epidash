@@ -131,7 +131,20 @@ main { max-width: 1280px; margin: 0 auto; padding: 28px 24px 80px; }
   margin-top: 10px !important;
   font-size: 12px !important;
 }
+.dash-card-flag { margin-right: 6px; }
+.dash-card-left {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
 .dash-card-by { color: var(--muted); }
+.dash-card-date {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dash-card-sep { color: var(--border); }
 .empty { color: var(--muted); padding: 40px 0; text-align: center; }
 
 /* ── dashboard view ───────────────────────────────── */
