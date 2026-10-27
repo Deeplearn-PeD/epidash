@@ -44,6 +44,25 @@
     </div>
   </div>
 
+  <!-- Text block editor (dashboard owner only) -->
+  <div id="block-editor" hidden>
+    <div class="block-editor-box">
+      <h3 id="block-editor-title"></h3>
+      <div class="block-editor-row">
+        <select id="block-position" aria-label="Block position"></select>
+        <button id="block-preview-btn" class="block-secondary" data-i18n="block_preview">Preview</button>
+      </div>
+      <textarea id="block-input" rows="10" data-i18n-placeholder="block_placeholder"
+        placeholder="Write markdown here. LaTeX like $e=mc^2$ or $$\\int_0^1 f(x)\\,dx$$ is supported."></textarea>
+      <div id="block-preview" class="markdown-body" hidden></div>
+      <p id="block-error" class="block-error" hidden></p>
+      <div class="block-editor-actions">
+        <button id="block-cancel" class="block-secondary" data-i18n="cancel">Cancel</button>
+        <button id="block-save" data-i18n="save">Save</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
   <script src="/i18n.js"></script>

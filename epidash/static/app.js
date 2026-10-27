@@ -19,6 +19,15 @@ const tweakLog = document.getElementById("tweak-log");
 const tweakInput = document.getElementById("tweak-input");
 const tweakSend = document.getElementById("tweak-send");
 const askSend = document.getElementById("ask-send");
+const blockEditor = document.getElementById("block-editor");
+const blockEditorTitle = document.getElementById("block-editor-title");
+const blockPosition = document.getElementById("block-position");
+const blockPreviewBtn = document.getElementById("block-preview-btn");
+const blockInput = document.getElementById("block-input");
+const blockPreview = document.getElementById("block-preview");
+const blockError = document.getElementById("block-error");
+const blockCancel = document.getElementById("block-cancel");
+const blockSave = document.getElementById("block-save");
 
 let currentSlug = null;
 let currentDashboard = null;
@@ -235,6 +244,7 @@ async function showDashboard(slug) {
       <div class="dash-title-row">
         <h1>${esc(data.title)}</h1>
         <div class="dash-actions">
+          ${data.can_edit ? `<button id="add-block-btn" class="action-btn" title="${t("add_text_title")}">${t("add_text")}</button>` : ""}
           <button id="like-btn" class="action-btn like-btn" title="Like this dashboard">
             ${HEART_SVG}<span id="like-count">${data.likes ?? 0}</span>
           </button>
@@ -262,11 +272,24 @@ async function showDashboard(slug) {
   );
   for (const chart of charts) {
     const card = document.createElement("div");
-    card.className = "chart-card" + (chart.position.width === "half" ? "" : " full");
+    card.className =
+      "chart-card" +
+      (chart.position.width === "half" ? "" : " full") +
+      (chart.kind === "markdown" && !chart.title ? " text-card" : "");
     const srcBadge = chart.source
       ? `<span class="src-badge src-${esc(chart.source.status)}" title="Auto-updates every ${esc(String(chart.source.refresh_interval_s))}s · last refresh: ${esc(String(chart.source.last_refreshed_at || "never"))} (${esc(chart.source.status)})">⇣ auto</span>`
       : "";
-    card.innerHTML = `<h2>${esc(chart.title || chart.kind)}${srcBadge}</h2><div class="plot"></div>`;
+    const tools = data.can_edit && chart.kind === "markdown"
+      ? `<span class="block-tools">` +
+        `<button class="block-tool" data-act="edit" data-id="${chart.id}" title="${t("edit_block")}">✎</button>` +
+        `<button class="block-tool" data-act="delete" data-id="${chart.id}" title="${t("delete_block")}">✕</button>` +
+        `</span>`
+      : "";
+    // untitled markdown blocks are narrative text boxes: no "markdown" heading
+    const head = chart.title || chart.kind !== "markdown"
+      ? `<h2>${esc(chart.title || chart.kind)}${srcBadge}</h2>`
+      : "";
+    card.innerHTML = head + `<div class="plot"></div>` + tools;
     grid.appendChild(card);
     try {
       renderChart(card.querySelector(".plot"), chart);
@@ -275,6 +298,8 @@ async function showDashboard(slug) {
         `<p class="empty">${t("render_failed")}${esc(String(e))}</p>`;
     }
   }
+
+  if (data.can_edit) wireBlockEditor(slug);
 
   if (tweaksEnabled) pollForUpdates(data.updated_at);
 }
@@ -367,6 +392,122 @@ function wireDashActions(slug, serverLikes, viewerLiked = false) {
   });
 }
 
+// ───────────────────── text block editor (owner) ───────────────────
+
+let editingBlock = null;
+
+function displayOrdered(excludeId = null) {
+  return [...currentDashboard.charts]
+    .filter((c) => c.id !== excludeId)
+    .sort((a, b) => (a.position.order ?? a.id) - (b.position.order ?? b.id));
+}
+
+function buildPositionOptions(chart) {
+  const options = [`<option value="top">${t("block_position_top")}</option>`];
+  if (chart) options.push(`<option value="" selected>${t("block_keep_position")}</option>`);
+  options.push(`<option value="end"${chart ? "" : " selected"}>${t("block_position_end")}</option>`);
+  for (const c of displayOrdered(chart ? chart.id : null)) {
+    const label = c.title || t("block_generic");
+    options.push(`<option value="after:${c.id}">${t("block_position_after")} ${esc(label)}</option>`);
+  }
+  blockPosition.innerHTML = options.join("");
+}
+
+function openBlockEditor(chart = null) {
+  editingBlock = chart;
+  blockEditorTitle.textContent = chart ? t("block_edit_title") : t("block_new_title");
+  blockInput.value = chart ? String((chart.data || {}).text || "") : "";
+  blockError.hidden = true;
+  blockError.textContent = "";
+  buildPositionOptions(chart);
+  showPreview(false);
+  blockEditor.hidden = false;
+  blockInput.focus();
+}
+
+function closeBlockEditor() {
+  blockEditor.hidden = true;
+  editingBlock = null;
+}
+
+function showPreview(on) {
+  if (on) {
+    blockPreview.innerHTML = renderMarkdownText(blockInput.value);
+    maybeRenderMath(blockPreview, blockInput.value);
+  }
+  blockPreview.hidden = !on;
+  blockInput.hidden = on;
+  blockPreviewBtn.textContent = on ? t("block_write") : t("block_preview");
+}
+
+function setBlockBusy(busy) {
+  blockSave.disabled = busy;
+  blockCancel.disabled = busy;
+}
+
+async function saveBlock() {
+  const body = { text: blockInput.value };
+  const pos = blockPosition.value;
+  if (pos === "top") body.top = true;
+  else if (pos.startsWith("after:")) body.after = Number(pos.slice(6));
+  setBlockBusy(true);
+  blockError.hidden = true;
+  try {
+    const base = `/api/dashboards/${encodeURIComponent(currentSlug)}/blocks`;
+    if (editingBlock) {
+      await api(withToken(`${base}/${editingBlock.id}`), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } else {
+      await api(withToken(base), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+    closeBlockEditor();
+    await showDashboard(currentSlug);
+  } catch (e) {
+    blockError.textContent = t("block_error") + String(e.message || e);
+    blockError.hidden = false;
+  }
+  setBlockBusy(false);
+}
+
+blockPreviewBtn.addEventListener("click", () => showPreview(blockPreview.hidden));
+blockCancel.addEventListener("click", closeBlockEditor);
+blockSave.addEventListener("click", saveBlock);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !blockEditor.hidden) closeBlockEditor();
+});
+
+function wireBlockEditor(slug) {
+  const addBtn = document.getElementById("add-block-btn");
+  if (addBtn) addBtn.addEventListener("click", () => openBlockEditor());
+  document.querySelectorAll(".block-tool").forEach((btn) => {
+    btn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = Number(btn.dataset.id);
+      if (btn.dataset.act === "delete") {
+        if (!window.confirm(t("delete_block_confirm"))) return;
+        try {
+          await api(
+            withToken(`/api/dashboards/${encodeURIComponent(slug)}/blocks/${id}`),
+            { method: "DELETE" },
+          );
+        } catch (_) { /* keep the page as-is on failure */ }
+        showDashboard(slug);
+      } else {
+        const chart = currentDashboard.charts.find((c) => c.id === id);
+        if (chart) openBlockEditor(chart);
+      }
+    });
+  });
+}
+
 // ───────────────────────────── export ──────────────────────────────
 
 const EXPORT_FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
@@ -427,9 +568,13 @@ async function exportPng() {
     ctx.fillRect(c.x, c.y, c.w, c.h);
     ctx.strokeStyle = "#30363d";
     ctx.strokeRect(c.x + 0.5, c.y + 0.5, c.w - 1, c.h - 1);
-    ctx.fillStyle = "#8b949e";
-    ctx.font = `600 15px ${EXPORT_FONT}`;
-    ctx.fillText(card.querySelector("h2").textContent, c.x + 18, c.y + 18);
+    // untitled text blocks have no heading
+    const headEl = card.querySelector("h2");
+    if (headEl) {
+      ctx.fillStyle = "#8b949e";
+      ctx.font = `600 15px ${EXPORT_FONT}`;
+      ctx.fillText(headEl.textContent, c.x + 18, c.y + 18);
+    }
 
     const plotEl = card.querySelector(".plot");
     if (plotEl && plotEl.data) {
@@ -639,6 +784,66 @@ function renderMarkdownText(text) {
 
 function renderMarkdown(el, data) {
   el.innerHTML = `<div class="markdown-body">${renderMarkdownText(data.text)}</div>`;
+  // math renders AFTER sanitization: KaTeX output is never stripped and
+  // can never bypass DOMPurify
+  maybeRenderMath(el, data.text);
+}
+
+// ───────────────────────── math (KaTeX) ────────────────────────────
+
+// KaTeX (like Plotly) loads on demand: only when a text block contains
+// math delimiters. A stray "$" in prose won't load it or render math
+// unless it wraps something that looks like an expression.
+const MATH_RE = /\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|\$\S[^\n$]*?\$/;
+
+let katexPromise = null;
+function ensureKatex() {
+  if (window.renderMathInElement) return Promise.resolve();
+  if (!katexPromise) {
+    katexPromise = new Promise((resolve, reject) => {
+      const css = document.createElement("link");
+      css.rel = "stylesheet";
+      css.href = "/vendor/katex/katex.min.css";
+      document.head.appendChild(css);
+      const js = document.createElement("script");
+      js.src = "/vendor/katex/katex.min.js";
+      js.onload = () => {
+        const auto = document.createElement("script");
+        auto.src = "/vendor/katex/auto-render.min.js";
+        auto.onload = resolve;
+        auto.onerror = () => {
+          katexPromise = null;
+          reject(new Error("Failed to load the math renderer"));
+        };
+        document.head.appendChild(auto);
+      };
+      js.onerror = () => {
+        katexPromise = null;
+        reject(new Error("Failed to load the math renderer"));
+      };
+      document.head.appendChild(js);
+    });
+  }
+  return katexPromise;
+}
+
+function renderMath(el) {
+  // auto-render only rewrites text nodes; the surrounding HTML is
+  // already sanitized, so this is safe
+  window.renderMathInElement(el, {
+    delimiters: [
+      { left: "$$", right: "$$", display: true },
+      { left: "\\[", right: "\\]", display: true },
+      { left: "\\(", right: "\\)", display: false },
+      { left: "$", right: "$", display: false },
+    ],
+    ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code"],
+  });
+}
+
+function maybeRenderMath(el, text) {
+  if (!MATH_RE.test(String(text || ""))) return;
+  ensureKatex().then(() => renderMath(el)).catch(() => { /* leave raw */ });
 }
 
 function formatKpiValue(value) {

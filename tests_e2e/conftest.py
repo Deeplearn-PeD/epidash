@@ -85,6 +85,10 @@ def server_url():
         d["id"], "markdown", title="Methodology", position={"order": 4, "width": "half"},
         data={"text": "## Methodology\nData refreshed **weekly** from `INFO-DENGUE`."},
     )
+    store.add_chart(
+        d["id"], "markdown", position={"order": 5, "width": "full"},
+        data={"text": "Euler's identity: $e^{i\\pi} + 1 = 0$ and, in display math, $$\\int_0^1 x\\,dx = \\frac{1}{2}.$$"},
+    )
     store.set_dashboard_status(d["id"], "published")
     draft = store.create_dashboard("Hidden Draft", slug="e2e-draft")
     assert store.get_dashboard(draft["id"])

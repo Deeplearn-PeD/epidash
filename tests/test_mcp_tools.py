@@ -92,6 +92,15 @@ class TestDashboardWorkflow:
         assert updated["language"] == "en"
         assert store.get_dashboard(d["id"])["language"] == "en"
 
+    async def test_owner_sub_round_trip(self, env):
+        store, _ = env
+        async with keyed_context(store):
+            d = await mcp_server.create_dashboard("Dengue RJ", owner_sub="sub-abc")
+            assert d["owner_sub"] == "sub-abc"
+            updated = await mcp_server.update_dashboard(d["id"], owner_sub="sub-xyz")
+        assert updated["owner_sub"] == "sub-xyz"
+        assert store.get_dashboard(d["id"])["owner_sub"] == "sub-xyz"
+
     async def test_list_dashboards_and_audit_log(self, env):
         store, _ = env
         async with keyed_context(store):

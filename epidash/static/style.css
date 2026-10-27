@@ -145,6 +145,69 @@ main { max-width: 1280px; margin: 0 auto; padding: 28px 24px 80px; }
   white-space: nowrap;
 }
 .dash-card-sep { color: var(--border); }
+
+/* ── text blocks & owner editor ───────────────────────── */
+.chart-card.text-card { padding: 14px 18px; }
+.chart-card .block-tools {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  display: none;
+  gap: 6px;
+}
+.chart-card { position: relative; }
+.chart-card:hover .block-tools { display: inline-flex; }
+.block-tool {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 4px 7px;
+}
+.block-tool:hover { border-color: var(--accent); color: var(--text); }
+#block-editor {
+  align-items: center;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  inset: 0;
+  justify-content: center;
+  position: fixed;
+  z-index: 100;
+}
+#block-editor[hidden] { display: none; }
+.block-editor-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: min(720px, 92vw);
+  padding: 18px;
+  width: 100%;
+}
+.block-editor-box h3 { margin: 0; }
+.block-editor-row { display: flex; gap: 8px; }
+.block-editor-row select {
+  background: var(--bg, #0d1117);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  flex: 1;
+  padding: 6px 8px;
+}
+.block-editor-row button, .block-editor-actions button {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 6px 12px;
+}
+.block-secondary { background: transparent; color: var(--text); }
+.block-editor-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.block-error { color: #f85149; margin: 0; }
 .empty { color: var(--muted); padding: 40px 0; text-align: center; }
 
 /* ── dashboard view ───────────────────────────────── */

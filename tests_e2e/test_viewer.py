@@ -46,16 +46,23 @@ class TestDashboardView:
         fresh_page.goto(f"{server_url}/#/d/e2e-dengue")
         expect(fresh_page.locator(".dash-head h1")).to_have_text("Dengue E2E")
         expect(fresh_page.locator(".dash-byline")).to_have_text("by EpidBot")
-        expect(fresh_page.locator(".chart-card")).to_have_count(4)
+        expect(fresh_page.locator(".chart-card")).to_have_count(5)
         expect(fresh_page.locator(".back-link")).to_be_visible()
 
     def test_markdown_block_renders(self, fresh_page, server_url):
         fresh_page.goto(f"{server_url}/#/d/e2e-dengue")
-        body = fresh_page.locator(".markdown-body")
+        body = fresh_page.locator(".markdown-body").first
         expect(body).to_be_visible()
         expect(body.locator("h2")).to_have_text("Methodology")
         expect(body.locator("strong")).to_have_text("weekly")
         expect(body.locator("code")).to_have_text("INFO-DENGUE")
+
+    def test_latex_renders_in_markdown_block(self, fresh_page, server_url):
+        fresh_page.goto(f"{server_url}/#/d/e2e-dengue")
+        # KaTeX is lazy-loaded only because the block contains math
+        katex = fresh_page.locator(".chart-card .katex")
+        expect(katex.first).to_be_visible()
+        expect(katex).to_have_count(2)  # inline and display math
 
     def test_kpi_uses_thousands_separator(self, fresh_page, server_url):
         fresh_page.goto(f"{server_url}/#/d/e2e-dengue")

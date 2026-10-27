@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS dashboards (
     status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'published')),
     created_by TEXT NOT NULL DEFAULT '',
     language TEXT NOT NULL DEFAULT '',
+    owner_sub TEXT NOT NULL DEFAULT '',
     visibility TEXT NOT NULL DEFAULT 'public' CHECK (visibility IN ('public', 'unlisted', 'restricted')),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),

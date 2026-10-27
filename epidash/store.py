@@ -159,6 +159,11 @@ class Store:
             con.execute(
                 "ALTER TABLE dashboards ADD COLUMN language TEXT NOT NULL DEFAULT ''"
             )
+        columns = {r["name"] for r in con.execute("PRAGMA table_info(dashboards)")}
+        if "owner_sub" not in columns:
+            con.execute(
+                "ALTER TABLE dashboards ADD COLUMN owner_sub TEXT NOT NULL DEFAULT ''"
+            )
 
     @staticmethod
     def _relax_data_sources_kind_check(con: sqlite3.Connection) -> None:
@@ -240,15 +245,16 @@ class Store:
         layout: dict | None = None,
         created_by: str = "",
         language: str = "",
+        owner_sub: str = "",
     ) -> dict:
         slug = slug or secrets.token_urlsafe(9)
         with self.conn() as con:
             try:
                 cur = con.execute(
                     "INSERT INTO dashboards (slug, title, description, layout,"
-                    " created_by, language) VALUES (?, ?, ?, ?, ?, ?)",
+                    " created_by, language, owner_sub) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (slug, title, description, json.dumps(layout or {}),
-                     created_by, language),
+                     created_by, language, owner_sub),
                 )
             except sqlite3.IntegrityError as e:
                 raise ValueError(f"slug '{slug}' already exists") from e
@@ -288,6 +294,7 @@ class Store:
         layout: dict | None = None,
         created_by: str | None = None,
         language: str | None = None,
+        owner_sub: str | None = None,
     ) -> dict | None:
         sets, args = ["updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"], []
         if title is not None:
@@ -305,6 +312,9 @@ class Store:
         if language is not None:
             sets.append("language = ?")
             args.append(language)
+        if owner_sub is not None:
+            sets.append("owner_sub = ?")
+            args.append(owner_sub)
         args.append(dashboard_id)
         with self.conn() as con:
             cur = con.execute(
@@ -627,6 +637,31 @@ class Store:
                 (chart["dashboard_id"],),
             )
         return chart
+
+    def renumber_charts(self, dashboard_id: int, ordered_ids: list[int]) -> None:
+        """Rewrite position.order densely as 0..n-1 following `ordered_ids`
+        (used by the owner text-block editor to keep insertion points exact).
+        Charts missing from the list keep their relative order at the end.
+        Bumps the dashboard's updated_at so viewers pick up the change."""
+        with self.conn() as con:
+            rows = con.execute(
+                "SELECT id, position FROM charts WHERE dashboard_id = ?",
+                (dashboard_id,),
+            ).fetchall()
+            positions = {r["id"]: json.loads(r["position"] or "{}") for r in rows}
+            tail = [r["id"] for r in rows if r["id"] not in set(ordered_ids)]
+            for index, chart_id in enumerate([*ordered_ids, *tail]):
+                pos = positions.get(chart_id, {})
+                pos["order"] = index
+                con.execute(
+                    "UPDATE charts SET position = ? WHERE id = ?",
+                    (json.dumps(pos), chart_id),
+                )
+            con.execute(
+                "UPDATE dashboards SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')"
+                " WHERE id = ?",
+                (dashboard_id,),
+            )
 
     def update_chart_data(self, chart_id: int, data: dict) -> dict | None:
         """Replace a chart's data envelope (used by the refresher); bumps the

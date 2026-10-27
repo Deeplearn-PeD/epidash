@@ -31,7 +31,7 @@ from epidash.epidbot_client import (
 )
 from epidash.logging import get_logger
 from epidash.routes_auth import get_viewer_from_request
-from epidash.store import Store
+from epidash.store import MARKDOWN_MAX_CHARS, Store, validate_chart_data
 
 logger = get_logger(__name__)
 
@@ -170,6 +170,7 @@ async def get_published_dashboard(slug: str, request: Request) -> dict:
         **_public_dashboard(dashboard),
         "likes": store.get_likes(dashboard["id"]),
         "viewer_liked": liked,
+        "can_edit": _is_owner(dashboard, viewer),
         "charts": charts,
         "tweaks_enabled": get_settings().epidbot_configured,
     }
@@ -336,6 +337,153 @@ async def _process_question(
         requester=requester,
     )
     await _process_epidbot_turn(tweak_id, message, "Question")
+
+
+def _is_owner(dashboard: dict, viewer: dict | None) -> bool:
+    """True when the signed-in viewer may edit this dashboard's text blocks.
+
+    Matched by the dashboard's stored owner identity (owner_sub), or — for
+    dashboards created before ownership was tracked — by the public creator
+    name matching the viewer's name or email."""
+    if viewer is None:
+        return False
+    owner_sub = (dashboard.get("owner_sub") or "").strip()
+    if owner_sub and viewer.get("sub") == owner_sub:
+        return True
+    created_by = (dashboard.get("created_by") or "").strip().casefold()
+    if not created_by:
+        return False
+    return created_by in {
+        (viewer.get("name") or "").strip().casefold(),
+        (viewer.get("email") or "").strip().casefold(),
+    }
+
+
+def _display_key(chart: dict) -> int:
+    """Display order of a chart (mirrors the viewer's grid sort)."""
+    order = (chart.get("position") or {}).get("order")
+    return order if isinstance(order, (int, float)) else chart["id"]
+
+
+def _owner_dashboard(slug: str, request: Request) -> dict:
+    """Published dashboard whose text blocks the requester may edit."""
+    store = get_store()
+    viewer = get_viewer_from_request(request)
+    dashboard = _get_published(
+        store, slug, viewer=viewer, token=request.query_params.get("token")
+    )
+    if viewer is None:
+        raise HTTPException(status_code=401, detail="Login required to edit")
+    if not _is_owner(dashboard, viewer):
+        raise HTTPException(
+            status_code=403, detail="Only the owner can edit this dashboard"
+        )
+    return dashboard
+
+
+class BlockCreate(BaseModel):
+    """New markdown text block. Placement: `top`, or right after chart
+    `after`, or at the end when neither is given."""
+
+    text: str = Field(min_length=1, max_length=MARKDOWN_MAX_CHARS)
+    after: Optional[int] = None
+    top: bool = False
+
+
+class BlockUpdate(BaseModel):
+    """Change a markdown block's text and/or move it."""
+
+    text: Optional[str] = Field(default=None, min_length=1, max_length=MARKDOWN_MAX_CHARS)
+    after: Optional[int] = None
+    top: bool = False
+
+
+@router.post("/dashboards/{slug}/blocks", status_code=201)
+async def create_block(slug: str, body: BlockCreate, request: Request) -> dict:
+    """Add a markdown text block between the dashboard's visualizations."""
+    store = get_store()
+    dashboard = _owner_dashboard(slug, request)
+    try:
+        validate_chart_data("markdown", {"text": body.text})
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    ordered = [
+        c["id"] for c in sorted(
+            store.list_charts(dashboard["id"]), key=_display_key
+        )
+    ]
+    if body.top:
+        index = 0
+    elif body.after is not None:
+        if body.after not in ordered:
+            raise HTTPException(status_code=404, detail="Anchor chart not found")
+        index = ordered.index(body.after) + 1
+    else:
+        index = len(ordered)
+    chart = store.add_chart(
+        dashboard["id"], "markdown", data={"text": body.text},
+        position={"order": index, "width": "full"},
+    )
+    ordered.insert(index, chart["id"])
+    store.renumber_charts(dashboard["id"], ordered)
+    return store.get_chart(chart["id"])
+
+
+@router.patch("/dashboards/{slug}/blocks/{chart_id}")
+async def update_block(slug: str, chart_id: int, body: BlockUpdate, request: Request) -> dict:
+    """Edit a markdown text block's text and/or move it."""
+    store = get_store()
+    dashboard = _owner_dashboard(slug, request)
+    chart = store.get_chart(chart_id)
+    if (
+        chart is None
+        or chart["dashboard_id"] != dashboard["id"]
+        or chart["kind"] != "markdown"
+    ):
+        raise HTTPException(status_code=404, detail="Text block not found")
+    if body.text is not None:
+        try:
+            validate_chart_data("markdown", {"text": body.text})
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+        store.update_chart(chart_id, data={"text": body.text})
+
+    if body.top or body.after is not None:
+        ordered = [
+            c["id"] for c in sorted(
+                store.list_charts(dashboard["id"]), key=_display_key
+            )
+            if c["id"] != chart_id
+        ]
+        if body.top:
+            index = 0
+        else:
+            if body.after not in ordered:
+                raise HTTPException(status_code=404, detail="Anchor chart not found")
+            index = ordered.index(body.after) + 1
+        ordered.insert(index, chart_id)
+        store.renumber_charts(dashboard["id"], ordered)
+    else:
+        # text-only change: still let viewers' polling pick it up
+        store.update_dashboard(dashboard["id"])
+    return store.get_chart(chart_id)
+
+
+@router.delete("/dashboards/{slug}/blocks/{chart_id}")
+async def delete_block(slug: str, chart_id: int, request: Request) -> dict:
+    """Remove a markdown text block."""
+    store = get_store()
+    dashboard = _owner_dashboard(slug, request)
+    chart = store.get_chart(chart_id)
+    if (
+        chart is None
+        or chart["dashboard_id"] != dashboard["id"]
+        or chart["kind"] != "markdown"
+    ):
+        raise HTTPException(status_code=404, detail="Text block not found")
+    store.remove_chart(chart_id)
+    return {"slug": slug, "deleted": chart_id}
 
 
 @router.get("/tweaks/{tweak_id}")

@@ -222,6 +222,7 @@ async def create_dashboard(
     layout: Optional[dict] = None,
     author: Optional[str] = None,
     language: Optional[str] = None,
+    owner_sub: Optional[str] = None,
 ) -> dict:
     """Create a dashboard in draft status. Returns its id and public slug.
     slug: optional URL-safe identifier (random when omitted). layout:
@@ -230,7 +231,9 @@ async def create_dashboard(
     user's name/handle when known (shown publicly as the creator);
     defaults to the control key's name. language: language the dashboard
     content is written in (e.g. "pt-BR", "en") — shown as a flag in the
-    gallery."""
+    gallery. owner_sub: identity (sub) of the owning viewer — when set
+    and that viewer signs in to the web app, they can add and edit text
+    blocks on the dashboard page."""
     try:
         try:
             creator = author or get_current_key().get("name", "")
@@ -239,6 +242,7 @@ async def create_dashboard(
         return _get_store().create_dashboard(
             title=title, description=description, slug=slug, layout=layout,
             created_by=creator, language=language or "",
+            owner_sub=owner_sub or "",
         )
     except ValueError as e:
         raise ToolError(str(e)) from e
@@ -253,15 +257,17 @@ async def update_dashboard(
     layout: Optional[dict] = None,
     author: Optional[str] = None,
     language: Optional[str] = None,
+    owner_sub: Optional[str] = None,
 ) -> dict:
     """Update a dashboard's title/description/layout (only provided fields
     change). author: replace the public creator name (e.g. to correct a
     dashboard attributed to a shared key). language: language the dashboard
     content is written in (e.g. "pt-BR", "en") — shown as a flag in the
-    gallery."""
+    gallery. owner_sub: identity (sub) of the owning viewer, who may then
+    add and edit text blocks on the dashboard page."""
     dashboard = _get_store().update_dashboard(
         dashboard_id, title=title, description=description, layout=layout,
-        created_by=author, language=language,
+        created_by=author, language=language, owner_sub=owner_sub,
     )
     if dashboard is None:
         raise ToolError(f"dashboard {dashboard_id} not found")
